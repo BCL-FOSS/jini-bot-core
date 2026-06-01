@@ -275,29 +275,6 @@ async def logout(auth_id):
         resp.delete_cookie("access_token")
         resp.delete_cookie("api_access_token")
         return resp
-    
-@app.route('/settings', defaults={'cmp_id': url_cmp_id,'obsc': url_key}, methods=['GET', 'POST'])
-@app.route("/settings/<string:cmp_id>/<string:obsc>", methods=['GET', 'POST'])
-@user_login_required
-async def settings(cmp_id, obsc):
-    cur_usr_id = current_client.auth_id
-    session["csrf_ready"] = True
-    user_data, ws_url = await retrieve_user_sess_data(sess_id=cur_usr_id)
-    telegram_form = await TelegramForm.create_form()
-    api_form = await APIForm.create_form()
-    tg_data = {}
-
-    if await telegram_form.validate_on_submit():
-        tg_data['id'] = telegram_form.user_id.data if telegram_form.user_id.data else telegram_form.chat_id.data if telegram_form.chat_id.data else ""
-
-        if await cl_data_db.upload_db_data(id=f"telegram_dta:{str(uuid.uuid4())}", data=tg_data) > 0:
-            await flash(message="Telegram settings saved successfully!", category="success")
-            return redirect(url_for('settings', cmp_id=cmp_id, obsc=obsc))
-        else:
-            await flash(message="Failed to save Telegram settings. Please try again.", category="danger")
-            return redirect(url_for('settings', cmp_id=cmp_id, obsc=obsc))
-
-    return await render_template("app/settings.html", obsc_key=session.get('url_key'), cmp_id=cmp_id, user=user_data.get('unm'), ws_url=ws_url, cur_usr=user_data.get('unm'), cur_usr_id=cur_usr_id, data=user_data, telegram_form=telegram_form, api_form=api_form)
 
 @app.route('/floweditor', defaults={'cmp_id': 'bcl','obsc': url_key, 'flow_id': 'default', 'prb_id': 'default'}, methods=['GET', 'POST'])
 @app.route("/floweditor/<string:cmp_id>/<string:obsc>/<string:flow_id>/<string:prb_id>", methods=['GET', 'POST'])

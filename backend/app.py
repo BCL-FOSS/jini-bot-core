@@ -20,11 +20,11 @@ from datetime import datetime, timedelta, timezone
 import uuid
 
 cl_sess_db = RedisDB(hostname=os.getenv('CLIENT_SESS_DB'), 
-                                                    port=os.getenv('CLIENT_SESS_DB_PORT'))
+                    port=os.getenv('CLIENT_SESS_DB_PORT'))
 cl_auth_db = RedisDB(hostname=os.getenv('CLIENT_AUTH_DB'), 
-                                                    port=os.getenv('CLIENT_AUTH_DB_PORT'))
+                    port=os.getenv('CLIENT_AUTH_DB_PORT'))
 cl_data_db = RedisDB(hostname=os.getenv('CLIENT_DATA_DB'),
-                                                    port=os.getenv('CLIENT_DATA_DB_PORT'))
+                    port=os.getenv('CLIENT_DATA_DB_PORT'))
 ip_ban_db = RedisDB(hostname=os.getenv('IP_BAN_DB'), 
                     port=os.getenv('IP_BAN_DB_PORT'))
 ws_rate_limiter = WSRateLimiter(redis_host=os.getenv('RATE_LIMIT_DB'), 
@@ -32,7 +32,7 @@ ws_rate_limiter = WSRateLimiter(redis_host=os.getenv('RATE_LIMIT_DB'),
 broker = Broker()
 bot_broker = Broker()
 util_obj=Util()
-api_name = os.getenv('API_NAME', 'umj-api-wflw')
+api_name = os.getenv('API_NAME')
 auth_ping_counter = {}
 mntr_url=os.getenv('SERVER_NAME')
 auth_attempts={}
@@ -168,11 +168,11 @@ async def _receive_telegram_bot() -> None:
                         "filter": {"tool_type": message['tool_filter'] if message['tool_filter'] else "all"},
                         "prb_id": message['prb_id'] if message['prb_id'] else None
                     }
-                    status, response = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"smartbot:8000/v1/query", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+                    status, response = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/query", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
 
                 case 'exec':
                     final_output = ""
-                    prompt, prb_id = await run_sync(lambda: util_obj.split_text_by_keyword(message["prompt"].lower(), keyword="prb_id:", cnfrm=True))()
+                    prompt, prb_id = await run_sync(lambda: util_obj.split_text_by_keyword(str(message["prompt"]).lower(), keyword="prb_id:", cnfrm=True))()
 
                     if prb_id is None:
                         await bot_broker.publish(message="Probe ID not specified. Please specify the probe ID by including 'prb_id:<ID>' at the end of your request.")
@@ -337,7 +337,7 @@ async def _receive_probe() -> None:
                         payload = {'documents': message}
                     else:
                         payload = message 
-                    status, ingested_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"smartbot:8000/v1/process", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+                    status, ingested_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/process", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
 
                     if status is True: 
                         if await cl_data_db.upload_db_data(id=ingested_data.get('db_id'), data=ingested_data.get('data')) > 0:

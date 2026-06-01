@@ -318,18 +318,17 @@
                                 <div class="col-6">
                                   <label class="form-label">Select Scan Type</label>
                                   <select class="form-select" id="scan-type-select" aria-label="Select Scan Type">
-                                    <option value="scan_arp">ARP Scan</option>
-                                    <option value="scan_custom">Custom Scan</option>
-                                    <option value="scan_dev_id">Device Identification Scan</option> 
-                                    <option value="scan_dev_fngr">Device Fingerprint Scan</option>
-                                    <option value="scan_full">Full Network Scan</option>
-                                    <option value="scan_snmp">SNMP Scan</option>
-                                    <option value="scan_port">Port Scan</option>
+                                    <option value="scan_vuln">Vulnerability Assessment</option>
+                                    <option value="scan_snmp">SNMP Discovery</option>
+                                    <option value="scan_os">System OS Detection</option>
+                                    <option value="scan_srvc">System Service(s) Detection</option>
+                                    <option value="scan_cust">Custom Scan</option>
+                                    <option value="scan_map">Network Discovery</option>
                                   </select>
                                 </div>
                               </div>
                             </div>
-                             <div class="form-floating mb-3">
+                            <div class="form-floating mb-3">
                               <div class="row mb-3">
                                 <div class="col-6 mb-3">
                                   <label class="form-label">Target</label>
@@ -337,52 +336,39 @@
                                   <p class="form-text">Enter the target IP address or subnet for the scan</p>
                                 </div>
                                 <div class="col-6 mb-3">
-                                  <label class="form-label">Ports to scan</label>
-                                  <input type="text" class="form-control" placeholder="ports" id="scan-ports">
-                                  <p class="form-text">For Port Scan only. Enter comma-separated ports to scan</p>
-                                </div>
-                              </div>
-                              
-                            </div>
-                            <div class="form-floating mb-3">
-                              <div class="row mb-3">
-                                <div class="col-6 mb-3">
-                                  <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" role="switch" id="scan-fplimit-switch">
-                                    <label class="form-check-label" for="scan-fplimit-switch">Limit Fingerprint Scan</label>
-                                  </div>
-                                </div>
-                                <div class="col-6 mb-3">
-                                  <div class="form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" role="switch" id="scan-devid-noise-switch">
-                                    <label class="form-check-label" for="scan-devid-noise-switch">Reduce Device Identification Scan Noise</label>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                            <div class="form-floating mb-3">
-                              <div class="row mb-3">
-                                <div class="col-6 mb-3">
-                                  <label class="form-label">SNMP Scripts</label>
-                                  <input type="text" class="form-control" placeholder="scripts" id="scan-snmp-scripts">
-                                  <p class="form-text">For SNMP Scan only. Enter comma-separated nmap SNMP scripts to run</p>
-                                </div>
-                                <div class="col-6 mb-3">
-                                  <label class="form-label">SNMP Community String</label>
-                                  <input type="text" class="form-control" placeholder="community" id="scan-snmp-community">
-                                  <p class="form-text">For SNMP Scan only. Enter the SNMP community string</p>
-                                </div>
-                              </div>
-                            </div>
-                            <div class="form-floating mb-3">
-                              <div class="row mb-3">
-                                <div class="col-6 mb-3">
                                   <label class="form-label">Command Options</label>
                                   <input type="text" class="form-control" id="scan-options" >
-                                  <div class="form-text" id="scan-addon4">For Custom scan only. Enter command arguments</div>
+                                  <div class="form-text">For Custom scan only. Enter nmap command arguments</div>
+                                </div>
+                              </div>
+                            </div>
+                            <div class="form-floating mb-3">
+                              <div class="form-label lead">SNMP Discovery Settings</div>
+                              <div class="row mb-3">
+                                <div class="col-6 mb-3">
+                                  <label class="form-label">Scripts</label>
+                                  <input type="text" class="form-control" placeholder="scripts" id="scan-snmp-scripts">
+                                  <p class="form-text">Enter comma-separated nmap SNMP scripts to run</p>
+                                </div>
+                                <div class="col-6 mb-3">
+                                  <label class="form-label">Community String</label>
+                                  <input type="text" class="form-control" placeholder="community" id="scan-snmp-community">
+                                  <p class="form-text">Enter your network SNMP community string</p>
+                                </div>
+                              </div>
+                            </div>
+                            <div class="form-floating mb-3">
+                              <div class="form-label lead">Network Discovery Settings</div>
+                              <div class="row mb-3">
+                                <div class="col-6 mb-3">
+                                  <label class="form-label">TCP SYN</label>
+                                  <input type="text" class="form-control" placeholder="scripts" id="scan-map-syn">
+                                  <p class="form-text">Enter comma-separated ports for TCP SYN discovery</p>
                                 </div>
                                 <div class="col-6 mb-3">  
-                                 
+                                  <label class="form-label">TCP ACK</label>
+                                  <input type="text" class="form-control" placeholder="scripts" id="scan-map-ack">
+                                  <p class="form-text">Enter comma-separated ports for TCP ACK discovery</p>
                                 </div>
                               </div>
                             </div>
@@ -737,7 +723,7 @@
 <script type="text/javascript">
     const curUserId = "{{ cur_usr_id }}";
     const mntrURL = "{{ mntr_url }}";
-    const taskInitBtn = document.getElementById("trcrt-init");
+    const taskInitBtn = document.getElementById("task-init");
     let selectedProbeTool = document.getElementById("tool-list");
     const notificationModal = new bootstrap.Modal(document.getElementById('notificationModal'), {});
     const taskToggleButtons = document.querySelectorAll(".task-toggle-btn");
@@ -1003,14 +989,14 @@
       buttonText.textContent = "Trace";
       this.disabled = false;
       resetTaskSchedule();
-      document.getElementById('notificationModalLabel').textContent = 'Traceroute Task Initiated';
-      document.getElementById('notif-modal-text').innerText = 'Network path trace task initiated. You will receive a notification when the trace is complete and the results are available for review.';
+      document.getElementById('notificationModalLabel').textContent = 'Task Initiated';
+      document.getElementById('notif-modal-text').innerText = 'Network automation task initiated. It may take a minute for the task to appear in the task list and for results to populate.';
       notificationModal.show();
     });
 
     taskToggleButtons.forEach(btn => {
       btn.addEventListener("click", (e) => {
-        e.stopPropagation(); // prevent row click selection (if undesired)
+        e.stopPropagation(); 
         const name = btn.dataset.name || '';
         const site = btn.dataset.site || '';
         const prb_id = btn.dataset.prb_id || '';

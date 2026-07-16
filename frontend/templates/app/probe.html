@@ -23,7 +23,7 @@
                           <img src="https://mdbcdn.b-cdn.net/img/Photos/new-templates/bootstrap-chat/ava1-bg.webp"
                               alt="avatar" class="d-flex align-self-center me-3" width="60">
                           <div class="pt-1">
-                            <p class="fw-bold mb-0">New Workflow</p>
+                            <p class="fw-bold mb-0">Create Workflow</p>
                           </div>
                         </div>
                       </a>
@@ -56,7 +56,7 @@
                           <img src="https://mdbcdn.b-cdn.net/img/Photos/new-templates/bootstrap-chat/ava1-bg.webp"
                               alt="avatar" class="d-flex align-self-center me-3" width="60">
                           <div class="pt-1">
-                            <p class="fw-bold mb-0">Tasks List</p>
+                            <p class="fw-bold mb-0">All Tasks</p>
                           </div>
                         </div>
                       </a>
@@ -629,6 +629,26 @@
   </div>
 </div>
 
+<div class="modal fade" id="taskInitModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="taskInitModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="taskInitModalLabel">Initialize Task</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div id="task-init-id-holder"></div>
+        <p id="task-init-msg"></p>
+      
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="button" class="btn btn-danger" data-bs-dismiss="modal" id="task-init-start">Initialize Task</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal fade" id="flowDeleteModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="deleteFlowModalLabel" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
@@ -723,9 +743,12 @@
 <script type="text/javascript">
     const curUserId = "{{ cur_usr_id }}";
     const mntrURL = "{{ mntr_url }}";
-    const taskInitBtn = document.getElementById("task-init");
-    let selectedProbeTool = document.getElementById("tool-list");
-    const notificationModal = new bootstrap.Modal(document.getElementById('notificationModal'), {});
+    const selectedProbeURL="{{ probe_api_url }}";
+    const taskCreate = document.getElementById("task-init");
+    const taskCreateInit = document.getElementById("task-init-start");
+    const taskCreateText = document.getElementById("task-init-msg");
+    const selectedProbeTool = document.getElementById("tool-list");
+    const probeNotificationModal = new bootstrap.Modal(document.getElementById('notificationModal'));
     const taskToggleButtons = document.querySelectorAll(".task-toggle-btn");
     const taskRescheduleButtons = document.querySelectorAll(".task-reschedule-btn");
     const taskDeleteButtons = document.querySelectorAll(".task-delete-btn");
@@ -736,8 +759,13 @@
     const taskToggleModal = new bootstrap.Modal(document.getElementById('taskToggleModal'));
     const taskRescheduleModal = new bootstrap.Modal(document.getElementById('taskRescheduleModal'));
     const taskDeleteModal = new bootstrap.Modal(document.getElementById('taskDeleteModal'));
+    const taskStartModal = new bootstrap.Modal(document.getElementById('taskInitModal'));
     const flowDeleteModal = new bootstrap.Modal(document.getElementById('flowDeleteModal'));
     const flowScheduleModal = new bootstrap.Modal(document.getElementById('flowScheduleModal'));
+    const taskToggleInit = document.getElementById('task-toggle-init');
+    const taskRescheduleInit = document.getElementById('task-reschedule-init');
+    const taskDeleteInit = document.getElementById('task-delete-init');
+    const flowScheduleInit = document.getElementById('flow-schedule-init');
 
     function setTaskSchedule(taskData) {
       const taskDays = document.getElementById('task-days');
@@ -814,6 +842,8 @@
         return false;
       }
 
+      taskData["action"] = traceType;
+
       if (traceDNSServer) {
         taskData["prms"]['tool_prms']["server"] = traceDNSServer;
       }
@@ -850,7 +880,7 @@
         return false;
       }
 
-      taskData["task"] = scanType;
+      taskData["action"] = scanType;
 
       if (scanInterface) {
         taskData["interface"] = scanInterface;
@@ -902,7 +932,7 @@
         return false;
       }
 
-      taskData["task"] = pcapType;
+      taskData["action"] = pcapType;
 
       if (pcapInterface && pcapType != "pcap_lcl") {
         taskData["prms"]["tool_prms"]["remote_iface"] = pcapInterface;
@@ -926,24 +956,13 @@
       return taskData;
     }
 
-    flowDeleteButtons.forEach(button => {
-      button.addEventListener('click', (e) => {
-        e.stopPropagation()
-        const id = button.dataset.id || '';
-        const name = button.dataset.name || '';
-        const probe = button.dataset.probe || '';
-        const comment = button.dataset.comment || '';
-
-        document.getElementById('flow-delete-id-holder').dataset.id = id;
-        document.getElementById('flow-delete-probe-holder').dataset.probe = probe;
-        document.getElementById('flow-delete-comment-holder').dataset.comment = comment;
-        deleteFlowText.textContent = `Are you sure you want to delete flow '${name}' on probe '${probe}'?`;
-        deleteFlowLabel.textContent = `Delete Flow: ${name}`;
-        flowDeleteModal.show();
+    taskCreate.addEventListener("click", async function () {
+      document.getElementById("task-init-id-holder").dataset.id = this.dataset.pid;
+      taskCreateText.textContent = `Are you sure you want to initialize a new task on probe: ${this.dataset.pid}?`;
+      taskStartModal.show();
       });
-    });
 
-    taskInitBtn.addEventListener("click", async function () {
+    taskCreateInit.addEventListener("click", async function () {
       const spinner = this.querySelector('.spinner-grow');
       const buttonText = this.querySelector('.prb-tsk-trc-button-text');
       const pcapType = document.getElementById("pcap-dropdown").value;
@@ -953,18 +972,17 @@
 
       spinner.classList.remove('d-none');
       spinner.classList.add('d-inline-block');
-      buttonText.textContent = "Tracing...";      
+      buttonText.textContent = "Initializing Task...";      
       this.disabled = true;
       const current_pid =  this.dataset.pid;
 
-      let taskData = {
-        "command": "init",
+      let taskData = [{
         "prb_id": current_pid,
-        "task": "",
+        "action": "",
         "prms": {
           "tool_prms": {},
         }
-      };
+      }];
 
       if (pcapType) {
         taskData = initPcap(taskData);
@@ -983,15 +1001,29 @@
       }
 
       taskData = setTaskSchedule(taskData);
-   
+
+      const resp = await fetch(`https://${selectedProbeURL}/v1/api/tasks/init`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(taskData)});
+
+      if (!resp.ok) {
+        spinner.classList.remove('d-inline-block');
+        spinner.classList.add('d-none');
+        buttonText.textContent = "Initialize Task";
+        this.disabled = false;
+        document.getElementById('notificationModalLabel').textContent = 'Task Initialization Failed'; 
+        document.getElementById('notif-modal-text').innerText = `Network automation task failed to initiate. Error: ${resp.status} ${resp.statusText}. Please check the task parameters and try again.`;
+        probeNotificationModal.show();
+        return;
+      }
+
+      const respJson = await resp.json();
       spinner.classList.remove('d-inline-block');
       spinner.classList.add('d-none');
-      buttonText.textContent = "Trace";
+      buttonText.textContent = "Initialize Task";
       this.disabled = false;
       resetTaskSchedule();
       document.getElementById('notificationModalLabel').textContent = 'Task Initiated';
-      document.getElementById('notif-modal-text').innerText = 'Network automation task initiated. It may take a minute for the task to appear in the task list and for results to populate.';
-      notificationModal.show();
+      document.getElementById('notif-modal-text').innerText = `Network automation task ${respJson.comment} for probe ${respJson.prb_name} has been successfully initiated.`;
+      probeNotificationModal.show();
     });
 
     taskToggleButtons.forEach(btn => {
@@ -1005,7 +1037,6 @@
         const enabled = btn.dataset.enabled || '';
         const comment = btn.dataset.comment || '';
         const id = btn.dataset.id || '';
-        // Fill modal fields
         document.getElementById('taskToggleModalLabel').textContent = `Toggle Task - ${name} ${job_type}`;
         document.getElementById('task-toggle-msg').textContent = `Are you sure you want to toggle the task: ${name} currently set to ${enabled}`;
         document.getElementById('task-toggle-id-holder').dataset.id = id;
@@ -1016,17 +1047,69 @@
         document.getElementById('task-toggle-site-holder').dataset.site = site;
         document.getElementById('task-toggle-timestamp-holder').dataset.timestamp = timestamp;
         document.getElementById('task-toggle-prb_id-holder').dataset.prb_id = prb_id;
-        if (taskToggleModal) {
-          taskToggleModal.show();
-        } else {
-          console.warn("Bootstrap Modal not available - cannot show task toggle modal.");
-        }
+       
+        taskToggleModal.show();
+
       });
+    });
+
+    taskToggleInit.addEventListener("click", async function () {
+      const spinner = this.querySelector('.spinner-grow');
+      const buttonText = this.querySelector('.tsk-enable-button-text');
+      spinner.classList.remove('d-none');
+      spinner.classList.add('d-inline-block');
+      buttonText.textContent = "Toggling...";
+      this.disabled = true;
+      
+      const probe_id = document.getElementById("task-toggle-prb_id-holder");
+      const enabled = document.getElementById("task-toggle-enabled-holder");
+      const comment = document.getElementById("task-toggle-comment-holder");
+      const name = document.getElementById("task-toggle-name-holder");
+      const id = document.getElementById("task-toggle-id-holder").dataset.id;
+
+      let taskData = [{
+        "act": "prb_task_init",
+        "prb_id": probe_id.dataset.prb_id,
+        "comment": comment.dataset.comment,
+        "task_id": id,
+        "user_id": curUserId
+      }];  
+
+      if (enabled.dataset.enabled === "enabled"){
+        taskData[0]["enabled"] = "disabled";
+        taskData[0]["oper"] = "disable_task";
+        buttonText.textContent = "Disabling...";
+      } else {
+        taskData[0]["enabled"] = "enabled";
+        taskData[0]["oper"] = "enable_task";
+        buttonText.textContent = "Enabling...";
+      }
+
+      const toggleResp = await fetch(`https://${selectedProbeURL}/v1/api/tasks/${taskData[0]["enabled"]}`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(taskData)});
+
+      if (!toggleResp.ok) {
+        spinner.classList.remove('d-inline-block');
+        spinner.classList.add('d-none');
+        buttonText.textContent = "Enable/Disable";
+        this.disabled = false;
+        document.getElementById('notificationModalLabel').textContent = 'Task Toggle Failed'; 
+        document.getElementById('notif-modal-text').innerText = `Network automation task failed to toggle. Error: ${toggleResp.status} ${toggleResp.statusText}. Please check the task parameters and try again.`;
+        probeNotificationModal.show();
+        return;
+      }
+      const toggleRespJson = await toggleResp.json();
+      spinner.classList.remove('d-inline-block');
+      spinner.classList.add('d-none');
+      buttonText.textContent = "Enable/Disable";      
+      this.disabled = false;
+      document.getElementById('notificationModalLabel').textContent = `Task Toggle Initiated`;
+      document.getElementById('notif-modal-text').innerText = `task ${name.dataset.name} was ${taskData[0]["enabled"]}. Toggle details: ${JSON.stringify(toggleRespJson)} for probe ${toggleRespJson.prb_id}.`;
+      probeNotificationModal.show();
     });
 
     taskRescheduleButtons.forEach(btn => {
       btn.addEventListener("click", (e) => {
-        e.stopPropagation(); // prevent row click selection (if undesired)
+        e.stopPropagation(); 
         const name = btn.dataset.name || '';
         const site = btn.dataset.site || '';
         const prb_id = btn.dataset.prb_id || '';
@@ -1035,8 +1118,7 @@
         const enabled = btn.dataset.enabled || '';
         const comment = btn.dataset.comment || '';
         const id = btn.dataset.id || '';
-        // Fill modal fields
-        document.getElementById('taskRescheduleModalLabel').textContent = `Reschedule Task - ${name} ${job_type}`;
+        document.getElementById('taskRescheduleModalLabel').textContent = `Are you sure you want to reschedule task - ${name} ${job_type}`;
         document.getElementById('task-reschedule-id-holder').dataset.id = id;
         document.getElementById('task-reschedule-comment-holder').dataset.comment = comment;
         document.getElementById('task-reschedule-enabled-holder').dataset.enabled = enabled;
@@ -1045,13 +1127,92 @@
         document.getElementById('task-reschedule-site-holder').dataset.site = site;
         document.getElementById('task-reschedule-timestamp-holder').dataset.timestamp = timestamp;
         document.getElementById('task-reschedule-prb_id-holder').dataset.prb_id = prb_id;
-        if (taskRescheduleModal) {
-          taskRescheduleModal.show();
-        } else {
-          console.warn("Bootstrap Modal not available - cannot show task reschedule modal.");
-        }
+        taskRescheduleModal.show();
       });
     }); 
+
+    taskRescheduleInit.addEventListener("click", async function () {
+      const spinner = this.querySelector('.spinner-grow');
+      const buttonText = this.querySelector('.tsk-reschedule-button-text');
+      spinner.classList.remove('d-none');
+      spinner.classList.add('d-inline-block');
+      buttonText.textContent = "Rescheduling...";
+      this.disabled = true;
+      
+      const probe_id = document.getElementById("task-reschedule-prb_id-holder");
+      const enabled = document.getElementById("task-reschedule-enabled-holder");
+      const comment = document.getElementById("task-reschedule-comment-holder");
+      const name = document.getElementById("task-reschedule-name-holder");
+      const id = document.getElementById("task-reschedule-id-holder").dataset.id;
+      const days = document.getElementById("task-reschedule-days");
+      const months = document.getElementById("task-reschedule-months");
+      const hours = document.getElementById("task-reschedule-hours");
+      const minutes = document.getElementById("task-reschedule-minutes");
+      const dom = document.getElementById("task-reschedule-dom");
+
+      let taskData = [{
+        "act": "prb_task_init",
+        "prb_id": probe_id.dataset.prb_id,
+        "comment": comment.dataset.comment,
+        "task_id": id,
+        "user_id": curUserId,
+        "schedule":{}
+      }];  
+
+      if (!days.value && !months.value && !hours.value && !minutes.value && !dom.value && !smartbotSwitch.checked){
+        spinner.classList.remove('d-inline-block');
+        spinner.classList.add('d-none');
+        buttonText.textContent = "Reschedule";        
+        this.disabled = false;
+        document.getElementById('notificationModalLabel').textContent = 'Missing Parameters';
+        document.getElementById('notif-modal-text').innerText = 'No rescheduling parameters provided. Please provide at least one parameter to update the task schedule and try again.';
+        probeNotificationModal.show();
+        return;
+      }
+      
+      if(days.value){
+        taskData[0]["schedule"]["days"] = days.value;
+      }
+      
+      if (months.value){
+        taskData[0]["schedule"]["months"] = months.value;
+      }
+
+      if (hours.value){
+        taskData[0]["schedule"]["hours"] = hours.value;
+      }
+
+      if (minutes.value){
+        taskData[0]["schedule"]["minutes"] = minutes.value; 
+      }
+
+      if (dom.value){
+        taskData[0]["schedule"]["dom"] = dom.value;
+      }
+
+      const reschResp = await fetch(`https://${selectedProbeURL}/v1/api/tasks/reschedule`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(taskData)});
+
+      if (!reschResp.ok) {
+        spinner.classList.remove('d-inline-block');
+        spinner.classList.add('d-none');
+        buttonText.textContent = "Reschedule";
+        this.disabled = false;
+        document.getElementById('notificationModalLabel').textContent = 'Task Reschedule Failed'; 
+        document.getElementById('notif-modal-text').innerText = `Network automation task failed to reschedule. Error: ${reschResp.status} ${reschResp.statusText}. Please check the task parameters and try again.`;
+        probeNotificationModal.show();
+        return;
+      }
+
+      const reschRespJson = await reschResp.json();
+
+      spinner.classList.remove('d-inline-block');
+      spinner.classList.add('d-none');
+      buttonText.textContent = "Reschedule";      
+      this.disabled = false;
+      document.getElementById('notificationModalLabel').textContent = `Task ${reschRespJson.comment} Rescheduled with status: ${reschRespJson.storage_opt}`;
+      document.getElementById('notif-modal-text').innerText = `task ${reschRespJson.comment} reschedule has been successfully completed.`;
+      probeNotificationModal.show();
+    });
 
     taskDeleteButtons.forEach(btn => {
       btn.addEventListener("click", (e) => {
@@ -1075,13 +1236,157 @@
         document.getElementById('task-delete-site-holder').dataset.site = site;
         document.getElementById('task-delete-timestamp-holder').dataset.timestamp = timestamp;
         document.getElementById('task-delete-prb_id-holder').dataset.prb_id = prb_id;
-        if (taskDeleteModal) {
-          taskDeleteModal.show();
-        } else {
-          console.warn("Bootstrap Modal not available - cannot show task delete modal.");
-        }
+    
+        taskDeleteModal.show();
+      
       });
     }); 
+
+    taskDeleteInit.addEventListener("click", async function () {
+      const spinner = this.querySelector('.spinner-grow');
+      const buttonText = this.querySelector('.tsk-delete-button-text');
+      spinner.classList.remove('d-none');
+      spinner.classList.add('d-inline-block');
+      buttonText.textContent = "Deleting...";      
+      this.disabled = true;
+
+      const probe_id = document.getElementById("task-delete-prb_id-holder");
+      const comment = document.getElementById("task-delete-comment-holder");
+      const name = document.getElementById("task-delete-name-holder");
+      const id = document.getElementById("task-delete-id-holder").dataset.id;
+
+      let taskData = {
+        "act": "prb_task_init",
+        "prb_id": probe_id.dataset.prb_id,
+        "comment": comment.dataset.comment,
+        "oper": "rm_task",
+        "task_id": id,
+        "user_id": curUsrID
+
+      };  
+
+      const delResp = await fetch(`https://${selectedProbeURL}/v1/api/tasks/remove`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(taskData)});
+
+      if (!delResp.ok) {
+        spinner.classList.remove('d-inline-block');
+        spinner.classList.add('d-none');
+        buttonText.textContent = "Delete";
+        this.disabled = false;
+        document.getElementById('notificationModalLabel').textContent = 'Task Deletion Failed'; 
+        document.getElementById('notif-modal-text').innerText = `Network automation task failed to delete. Error: ${delResp.status} ${delResp.statusText}. Please check the task parameters and try again.`;
+        probeNotificationModal.show();
+        return;
+      }
+
+      const delRespJson = await delResp.json();
+
+      spinner.classList.remove('d-inline-block');
+      spinner.classList.add('d-none');
+      buttonText.textContent = "Delete";
+      this.disabled = false;
+      document.getElementById('notificationModalLabel').textContent = `Task ${delRespJson.comment} Deletion Initiated`;
+      document.getElementById('notif-modal-text').innerText = `task ${delRespJson.comment} deleted successfully. Deletion details: ${JSON.stringify(delRespJson)} for probe ${delRespJson.prb_id}.`;
+
+      probeNotificationModal.show();
+    });
+
+    flowDeleteButtons.forEach(button => {
+      button.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const id = button.dataset.id;
+        const name = button.dataset.name;
+        const probe = button.dataset.probe;
+        const comment = button.dataset.comment;
+
+        document.getElementById('flow-delete-id-holder').dataset.id = id;
+        document.getElementById('flow-delete-probe-holder').dataset.probe = probe;
+        document.getElementById('flow-delete-comment-holder').dataset.comment = comment;
+        deleteFlowText.textContent = `Are you sure you want to delete flow '${name}' on probe '${probe}'?`;
+        deleteFlowLabel.textContent = `Delete Flow: ${name}`;
+        flowDeleteModal.show();
+      });
+    });
+
+    flowScheduleInit.addEventListener("click", async function() {
+      const spinner = this.querySelector('.spinner-grow');
+      const buttonText = this.querySelector('.flow-schedule-button-text');
+      const flowDays = document.getElementById('flow-days');
+      const flowMonths = document.getElementById('flow-months');
+      const flowHours = document.getElementById('flow-hours');
+      const flowMinutes = document.getElementById('flow-minutes');
+      const flowDom = document.getElementById('flow-dom');
+
+      if (!flowDays.value && !flowMonths.value && !flowHours.value && !flowMinutes.value && !flowDom.value) {
+        document.getElementById('notificationModalLabel').textContent = 'Missing Schedule Parameters';
+        document.getElementById('notif-modal-text').innerText = 'Please provide at least one scheduling parameter (days, months, hours, minutes, or day of month) to schedule the flow task.';
+        probeNotificationModal.show();
+        return;
+      }
+
+      spinner.classList.remove('d-none');
+      spinner.classList.add('d-inline-block');
+      buttonText.textContent = "Scheduling Flow...";
+      this.disabled = true;
+      const id = document.getElementById('flow-schedule-id-holder').dataset.id;
+      const name = document.getElementById('flow-schedule-name-holder').dataset.name;
+      const prb_id = document.getElementById('flow-schedule-prb_id-holder').dataset.prb_id;
+      const flow = document.getElementById('flow-schedule-flow-holder').dataset.flow;
+
+      let taskData = {
+        "act": "prb_task_init",
+        "prb_id": prb_id,
+        "user_id": curUsrID,
+        "flow": flow,
+        "flow_name": name,
+        "flow_id": id,
+        "oper": "init_task",
+        "auto_type": "flow"
+      };
+
+      if (flowDays.value){
+        taskData["days"] = flowDays.value;
+      }
+
+      if (flowMonths.value){
+        taskData["months"] = flowMonths.value;
+      }
+
+      if (flowHours.value){
+        taskData["hours"] = flowHours.value;
+      }
+
+      if (flowMinutes.value){
+        taskData["minutes"] = flowMinutes.value;
+      }
+
+      if (flowDom.value){
+        taskData["dom"] = flowDom.value;
+      }
+
+      const flowDelResp = await fetch(`https://${selectedProbeURL}/v1/api/flows/remove`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(taskData)});
+
+      if (!flowDelResp.ok) {
+        spinner.classList.remove('d-inline-block');
+        spinner.classList.add('d-none');
+        buttonText.textContent = "Schedule Flow";
+        this.disabled = false;
+        document.getElementById('notificationModalLabel').textContent = 'Flow Task Scheduling Failed'; 
+        document.getElementById('notif-modal-text').innerText = `Flow task failed to schedule. Error: ${flowDelResp.status} ${flowDelResp.statusText}. Please check the scheduling parameters and try again.`;
+        probeNotificationModal.show();
+        return;
+      }
+
+      const flowDelRespJson = await flowDelResp.json();
+
+      spinner.classList.remove('d-inline-block');
+      spinner.classList.add('d-none');
+      
+      buttonText.textContent = "Schedule Flow";
+      this.disabled = false;
+      document.getElementById('notificationModalLabel').textContent = 'Flow Task Scheduled';
+      document.getElementById('notif-modal-text').innerText = `Flow ${name} is being scheduled on probe ${prb_id}. You will receive a notification when it has been initiated.`;
+      probeNotificationModal.show();
+    });
 
     function showToolWindow(type) {
       document.querySelectorAll(".tool-window").forEach(w => w.style.display = "none");

@@ -82,6 +82,98 @@
         </div>
       </div>
     </div>
+
+  </div>
+
+  <div class="modal fade" id="schedulerModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="schedulerModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="schedulerModalLabel">Schedule Task</h5>
+          <div id="task-scheduler-id-holder"></div>
+          <div id="task-scheduler-comment-holder"></div>
+          <div id="task-scheduler-enabled-holder"></div>
+          <div id="task-scheduler-name-holder"></div>
+          <div id="task-scheduler-type-holder"></div>
+          <div id="task-scheduler-site-holder"></div>
+          <div id="task-scheduler-timestamp-holder"></div>
+          <div id="task-scheduler-prb_id-holder"></div>
+        
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <form method="POST">
+            <div class="form-floating mb-3">
+              <h6 class="form-label bold">Task Reschedule Settings</h6>
+            </div>
+            <div class="form-floating mb-3">
+              <h6 class="form-label bold">Task Run Schedule</h6>
+              <p class="form-text">Use the fields below to set up a custom schedule for the selected task. Enter times ascomma-separated values or ranges.</p>
+              <div class="row mb-3">
+                  <div class="col-12">
+                    <label class="form-label">Choose day(s) of week to run task. Available values: 0 (Sunday) to 6 (Saturday).</label>
+                    <input class="form-control" type="text" id="scheduler-days">
+                    <div class="form-text">To run every Sunday, Wednesday and Saturday enter as such: 0,3,6.</div>
+                  </div>
+              </div>
+              <div class="row mb-3">
+                <div class="col-12">
+                    <label class="form-label">Choose minute(s) to run task. Available values: 0 to 59.</label>
+                    <input class="form-control" type="text" id="scheduler-minutes">
+                    <div class="form-text">For specific intervals, enter start,end,interval (e.g., 5,50,5). The task would run every 5 minutes from 5 to 50. </div> 
+                  </div>
+              </div>
+              <div class="row mb-3">
+                <div class="col-12">
+                    <label class="form-label">Choose day(s) of month to run task. Available values: 1 to 31.</label>
+                    <input class="form-control" type="text" id="scheduler-dom">
+                    <div class="form-text">For specific intervals, enter start,end,interval (e.g., 1,31,1). The task would run every day from 1 to 31. </div> 
+                  </div>
+              </div>
+              <div class="row mb-3">
+                <div class="col-12">
+                    <label class="form-label">Choose month(s) to run task. Available values: 1 to 12.</label>
+                    <input class="form-control" type="text" id="scheduler-months">
+                    <div class="form-text">For specific intervals, enter start,end,interval (e.g., 1,12,1). The task would run every month from January to December. </div> 
+                  </div>
+              </div>
+              <div class="row mb-3">
+                <div class="col-12">
+                    <label class="form-label">Choose hour(s) to run task. Available values: 0 to 23.</label>
+                    <input class="form-control" type="text" id="scheduler-hours">
+                    <div class="form-text">For specific intervals, enter start,end,interval (e.g., 0,23,1). The task would run every hour from 0 to 23. </div> 
+                  </div>  
+              </div>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-danger" data-bs-dismiss="modal" id="scheduler-init">
+            <span class="spinner-grow spinner-grow-sm d-none" role="status" aria-hidden="true"></span>
+            <span class="scheduler-init-button-text">Create Flow</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal fade" id="flowConfirmModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1" aria-labelledby="flowConfirmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="flowConfirmModalLabel">Save Flow</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="form-text" id="flowConfirmModalText">Are you sure you want to save this Flow?</p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <button type="button" class="btn btn-danger" data-bs-dismiss="modal" id="flow-confirm-init">Save Flow & Set Schedule</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -101,7 +193,49 @@
     let currentBotNodes = {};
     let currentSelectedBot = null;
 
-    const notificationModal = new bootstrap.Modal(document.getElementById('notificationModal'));
+    function setFlowSchedule(taskData) {
+      const scheduleDays = document.getElementById('scheduler-days');
+      const scheduleMonths = document.getElementById('scheduler-months');
+      const scheduleHours = document.getElementById('scheduler-hours');
+      const scheduleMinutes = document.getElementById('scheduler-minutes');
+      const scheduleDom = document.getElementById('scheduler-dom');
+
+      if (scheduleDays.value){
+        taskData["schedule"]["days"] = scheduleDays.value;
+      }
+
+      if (scheduleMonths.value){
+        taskData["schedule"]["months"] = scheduleMonths.value;
+      }
+
+      if (scheduleHours.value){
+        taskData["schedule"]["hours"] = scheduleHours.value;
+      }
+
+      if (scheduleMinutes.value){
+        taskData["schedule"]["minutes"] = scheduleMinutes.value;
+      }
+
+      if (scheduleDom.value){
+        taskData["schedule"]["dom"] = scheduleDom.value;
+      } 
+
+      return taskData;
+    }
+
+    function resetFlowSchedule() {
+      document.getElementById('scheduler-days').value = "";
+      document.getElementById('scheduler-months').value = "";
+      document.getElementById('scheduler-hours').value = "";
+      document.getElementById('scheduler-minutes').value = "";
+      document.getElementById('scheduler-dom').value = "";
+    }
+
+    const flowNotificationModal = new bootstrap.Modal(document.getElementById('notificationModal'));
+    const flowSchedulerModal = new bootstrap.Modal(document.getElementById('schedulerModal'));
+    const flowInit = document.getElementById('scheduler-init');
+    const flowConfirmModal = new bootstrap.Modal(document.getElementById('flowConfirmModal'));
+    const flowConfirmInit = document.getElementById('flow-confirm-init');
     const id = document.getElementById("drawflow");
     const editor = new Drawflow(id);
     editor.reroute = true;
@@ -110,8 +244,8 @@
     if (flowID !== "default") {
       const id = flowID;
       const payload = { id: id };    
-      const resp = await fetch(`https://${mntrURL}/v1/api/core/probes/exec/${prbID}/flows/load?usr={{ cur_usr }}&sess_id={{ cur_usr_id }}`, {method:'POST', credentials: "same-origin", body:JSON.stringify(payload)})
-      const j = await resp.json()
+      const resp = await fetch(`https://${mntrURL}/v1/api/core/probes/exec/${prbID}/flows/load?usr={{ cur_usr }}&sess_id={{ cur_usr_id }}`, {method:'POST', credentials: "same-origin", body:JSON.stringify(payload)});
+      const j = await resp.json();
 
       if (resp.ok) {
 
@@ -236,19 +370,33 @@
 
     // Save flow
     document.getElementById('save-flow').addEventListener('click', async ()=>{
+      flowConfirmModal.show();
+    });
+
+    flowConfirmInit.addEventListener('click', async () => {
+      flowSchedulerModal.show();
+    });
+
+    flowInit.addEventListener('click', async () => {
       const savename = document.getElementById('flow-save-name').value;
       let resp = null;
+
+      const payload = {};
 
       if (savename !== null && savename !== "") {
         const data = editor.export();
         const flow = JSON.stringify(data, null,4);
 
         if (flowID !== "default") {
-            const payload = {flow: flow, id: flowID, name: savename}
+            payload.flow = flow;
+            payload.id = flowID;
+            payload.name = savename;
             resp = await fetch(`https://${mntrURL}/v1/api/core/probes/exec/${prbID}/flows/edit?usr={{ cur_usr }}&sess_id={{ cur_usr_id }}`, {method:'POST', credentials: "same-origin", body:JSON.stringify(payload)});
     
         } else {
-            const payload = {flow: flow, probe: prbID, name: savename}
+            payload.flow = flow;
+            payload.probe = prbID;
+            payload.name = savename;
             resp = await fetch(`https://${mntrURL}/v1/api/core/probes/exec/${prbID}/flows/save?usr={{ cur_usr }}&sess_id={{ cur_usr_id }}`, {method:'POST', credentials: "same-origin", body:JSON.stringify(payload)});
         }
           

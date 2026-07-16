@@ -315,234 +315,130 @@
     const curUser = "{{ cur_usr }}";
     const mntrURL = "{{ mntr_url }}";
     let ws = new WebSocket(wsURLMon);
-    const notificationModal = new bootstrap.Modal(document.getElementById('notificationModal'));
-    let selectedProbe = document.getElementById("mcp-dropdown");
-    const chatInput = document.getElementById("chat-input");
-    const chatSend = document.getElementById("chat-send");
-    const taskToggleInit = document.getElementById('task-toggle-init');
-    const taskRescheduleInit = document.getElementById('task-reschedule-init');
-    const taskDeleteInit = document.getElementById('task-delete-init');
-    const taskSmartBotSwitch = document.getElementById('taskSmartBotSwitch');
-    const taskSmartBotPrompt = document.getElementById('taskSmartBotPrompt');
-    const netvisRunTraceButton = document.getElementById('netvis-trace-run-btn');
-    const netvisRunPerfButton = document.getElementById('netvis-perf-run-btn');
-    const netvisRunScanButton = document.getElementById('netvis-scan-run-btn');
-    const netvisRunPcapButton = document.getElementById('netvis-pcap-run-btn');
-    const flowScheduleInit = document.getElementById('flow-schedule-init');
-    const taskExecSwitch = document.getElementById('taskExecSwitch');
+    
+    function addNotification(data) {
+      const list = document.getElementById('notif-list');
+      if (!list) return;
 
-    flowScheduleInit.addEventListener("click", async function() {
-      const spinner = this.querySelector('.spinner-grow');
-      const buttonText = this.querySelector('.flow-schedule-button-text');
-      const flowDays = document.getElementById('flow-days');
-      const flowMonths = document.getElementById('flow-months');
-      const flowHours = document.getElementById('flow-hours');
-      const flowMinutes = document.getElementById('flow-minutes');
-      const flowDom = document.getElementById('flow-dom');
+      const li = document.createElement('li');
+      li.className = 'mb-2';
+      li.innerHTML = `
+        <a class="dropdown-item border-radius-md" href="javascript:;">
+          <div class="d-flex py-1">
+            <div class="avatar avatar-sm bg-gradient-warning me-3 my-auto" style="display:flex;align-items:center;justify-content:center;border-radius:6px;width:36px;height:36px;">
+              <i class="fa fa-exclamation-triangle text-white" aria-hidden="true" style="font-size:14px;"></i>
+            </div>
+            <div class="d-flex flex-column justify-content-center">
+              <h6 class="text-sm font-weight-normal mb-1">
+                <span class="font-weight-bold">${data.alert_type}</span> Alert
+              </h6>
+              <h4 class="text-sm font-weight-normal mb-0">
+                Probe: ${data.name}
+                Site: ${data.site}
+              </h4>
+              <p class="text-xs text-secondary mb-0">
+                <i class="fa fa-clock me-1"></i>
+                ${data.timestamp}
+              </p>
+            </div>
+          </div>
+        </a>
+      `;
 
-      if (!flowDays.value && !flowMonths.value && !flowHours.value && !flowMinutes.value && !flowDom.value) {
-        document.getElementById('notificationModalLabel').textContent = 'Missing Schedule Parameters';
-        document.getElementById('notif-modal-text').innerText = 'Please provide at least one scheduling parameter (days, months, hours, minutes, or day of month) to schedule the flow task.';
-        notificationModal.show();
-        return;
+      if (list.firstChild) {
+        list.insertBefore(li, list.firstChild);
+      } else {
+        list.appendChild(li);
       }
 
-      spinner.classList.remove('d-none');
-      spinner.classList.add('d-inline-block');
-      buttonText.textContent = "Scheduling Flow...";
-      this.disabled = true;
-      const id = document.getElementById('flow-schedule-id-holder').dataset.id;
-      const name = document.getElementById('flow-schedule-name-holder').dataset.name;
-      const prb_id = document.getElementById('flow-schedule-prb_id-holder').dataset.prb_id;
-      const flow = document.getElementById('flow-schedule-flow-holder').dataset.flow;
+      const bell = document.getElementById('notif-bell');
+      if (bell) {
+        bell.classList.add('bell-flash');
 
-      let taskData = {
-        "act": "prb_task_init",
-        "prb_id": prb_id,
-        "user_id": curUsrID,
-        "flow": flow,
-        "flow_name": name,
-        "flow_id": id,
-        "oper": "init_task",
-        "auto_type": "flow"
+        setTimeout(() => {
+          bell.classList.remove('bell-flash');
+        }, 3000);
+
+        const dropdownBtn = document.getElementById('dropdownMenuButton');
+        if (dropdownBtn) {
+          const removeFlashOnOpen = () => {
+            bell.classList.remove('bell-flash');
+            dropdownBtn.removeEventListener('click', removeFlashOnOpen);
+          };
+          dropdownBtn.addEventListener('click', removeFlashOnOpen);
+        }
+      }
+    }
+
+    function connectWebSocket() {
+
+      ws.onopen = () => {
+        console.log("WebSocket connected");
+   
+        const intervalId = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                const message = JSON.stringify({
+                  act: "ping",
+                  sess_id: "{{ auth_id }}"
+                });
+                ws.send(message);
+                console.log('WebSocket message sent:', message);
+            } else {
+                console.warn('WebSocket is not open, cannot send message.');
+                clearInterval(intervalId);
+            }
+        }, 5 * 60 * 1000);
+
+        ws.onerror = (err) => {
+          console.error("WebSocket error:", err);
+          clearInterval(intervalId);
+
+        };
+
+        ws.onclose = async (event) => {
+          console.warn("WebSocket closed:", event.code, event.reason);
+          clearInterval(intervalId);
+        };
+
       };
 
-      if (flowDays.value){
-        taskData["days"] = flowDays.value;
-      }
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.info(data);
 
-      if (flowMonths.value){
-        taskData["months"] = flowMonths.value;
-      }
+          if (data.user_id === curUsrID || data.usr_id === curUsrID) {
 
-      if (flowHours.value){
-        taskData["hours"] = flowHours.value;
-      }
+            if (data.msg && data.from) {
+              const chatWin = document.getElementById(`chat-${data.url}`);
+              if(data.final_output === true){
+                if (chatWin) appendMessage(chatWin, data.from, data.msg);
+                const spinner = document.getElementById('smartbot-spinner');
+                const buttonText = document.getElementById('smartbot-send-txt');
+                const smartbotSend = document.getElementById('chat-send');
+                spinner.classList.remove('d-inline-block');
+                spinner.classList.add('d-none');
+                buttonText.textContent = "Send";
+                smartbotSend.disabled = false;
+              } else {
+                if (chatWin) appendMessage(chatWin, data.from, data.msg);
+              } 
+            } 
+          }
 
-      if (flowMinutes.value){
-        taskData["minutes"] = flowMinutes.value;
-      }
+          if (data.alert_type){
+            addNotification(data);
+          }
 
-      if (flowDom.value){
-        taskData["dom"] = flowDom.value;
-      }
+        } catch (err) {
+          console.error("Invalid WS data:", err, event.data);
+        }
+      };
+    }
 
-      ws.send(JSON.stringify(taskData));
-      spinner.classList.remove('d-inline-block');
-      spinner.classList.add('d-none');
-      
-      buttonText.textContent = "Schedule Flow";
-      this.disabled = false;
-      document.getElementById('notificationModalLabel').textContent = 'Flow Task Scheduled';
-      document.getElementById('notif-modal-text').innerText = `Flow ${name} is being scheduled on probe ${prb_id}. You will receive a notification when it has been initiated.`;
-      notificationModal.show();
-    });
-
-    taskToggleInit.addEventListener("click", function () {
-      const spinner = this.querySelector('.spinner-grow');
-      const buttonText = this.querySelector('.tsk-enable-button-text');
-      spinner.classList.remove('d-none');
-      spinner.classList.add('d-inline-block');
-      buttonText.textContent = "Toggling...";
-      this.disabled = true;
-      
-      const probe_id = document.getElementById("task-toggle-prb_id-holder");
-      const enabled = document.getElementById("task-toggle-enabled-holder");
-      const comment = document.getElementById("task-toggle-comment-holder");
-      const name = document.getElementById("task-toggle-name-holder");
-      const id = document.getElementById("task-toggle-id-holder").dataset.id;
-
-      let taskData = {
-        "act": "prb_task_init",
-        "prb_id": probe_id.dataset.prb_id,
-        "comment": comment.dataset.comment,
-        "task_id": id,
-        "user_id": curUsrID
-      };  
-
-      if (enabled.dataset.enabled === "enabled"){
-        taskData["enabled"] = "disabled";
-        taskData["oper"] = "disable_task";
-        buttonText.textContent = "Disabling...";
-      } else {
-        taskData["enabled"] = "enabled";
-        taskData["oper"] = "enable_task";
-        buttonText.textContent = "Enabling...";
-      }
-      ws.send(JSON.stringify(taskData));
-      spinner.classList.remove('d-inline-block');
-      spinner.classList.add('d-none');
-      buttonText.textContent = "Enable/Disable";      
-      this.disabled = false;
-      document.getElementById('notificationModalLabel').textContent = `Task Toggle Initiated`;
-      document.getElementById('notif-modal-text').innerText = `task ${name.dataset.name} was ${taskData["enabled"]}. You will receive a notification when the task has been successfully toggled.`;
-      notificationModal.show();
-    });
-
-    taskRescheduleInit.addEventListener("click", function () {
-      const spinner = this.querySelector('.spinner-grow');
-      const buttonText = this.querySelector('.tsk-reschedule-button-text');
-      spinner.classList.remove('d-none');
-      spinner.classList.add('d-inline-block');
-      buttonText.textContent = "Rescheduling...";
-      this.disabled = true;
-      
-      const probe_id = document.getElementById("task-reschedule-prb_id-holder");
-      const enabled = document.getElementById("task-reschedule-enabled-holder");
-      const comment = document.getElementById("task-reschedule-comment-holder");
-      const name = document.getElementById("task-reschedule-name-holder");
-      const id = document.getElementById("task-reschedule-id-holder").dataset.id;
-      const days = document.getElementById("task-reschedule-days");
-      const months = document.getElementById("task-reschedule-months");
-      const hours = document.getElementById("task-reschedule-hours");
-      const minutes = document.getElementById("task-reschedule-minutes");
-      const dom = document.getElementById("task-reschedule-dom");
-
-      let taskData = {
-        "act": "prb_task_init",
-        "prb_id": probe_id.dataset.prb_id,
-        "comment": comment.dataset.comment,
-        "task_id": id,
-        "user_id": curUsrID
-      };  
-
-      if (!days.value && !months.value && !hours.value && !minutes.value && !dom.value && !smartbotSwitch.checked && !flowbotSwitch.checked){
-        spinner.classList.remove('d-inline-block');
-        spinner.classList.add('d-none');
-        buttonText.textContent = "Reschedule";        
-        this.disabled = false;
-        document.getElementById('notificationModalLabel').textContent = 'Missing Parameters';
-        document.getElementById('notif-modal-text').innerText = 'No rescheduling parameters provided. Please provide at least one parameter to update the task schedule and try again.';
-        notificationModal.show();
-      }
-      
-      if(days.value){
-        taskData["days"] = days.value;
-      }
-      
-      if (months.value){
-        taskData["months"] = months.value;
-      }
-
-      if (hours.value){
-        taskData["hours"] = hours.value;
-      }
-
-      if (minutes.value){
-        taskData["minutes"] = minutes.value; 
-      }
-
-      if (dom.value){
-        taskData["dom"] = dom.value;
-      }
-
-      taskData["oper"] = "resch_task";
-      ws.send(JSON.stringify(taskData));
-      spinner.classList.remove('d-inline-block');
-      spinner.classList.add('d-none');
-      buttonText.textContent = "Reschedule";      
-      this.disabled = false;
-      document.getElementById('notificationModalLabel').textContent = `Task ${name.dataset.name} Rescheduled`;
-      document.getElementById('notif-modal-text').innerText = `task ${name.dataset.name} reschedule has been successfully initiated.`;
-
-      notificationModal.show();
-    });
-
-    taskDeleteInit.addEventListener("click", async function () {
-      const spinner = this.querySelector('.spinner-grow');
-      const buttonText = this.querySelector('.tsk-delete-button-text');
-      spinner.classList.remove('d-none');
-      spinner.classList.add('d-inline-block');
-      buttonText.textContent = "Deleting...";      
-      this.disabled = true;
-
-      const probe_id = document.getElementById("task-delete-prb_id-holder");
-      const comment = document.getElementById("task-delete-comment-holder");
-      const name = document.getElementById("task-delete-name-holder");
-      const id = document.getElementById("task-delete-id-holder").dataset.id;
-
-      let taskData = {
-        "act": "prb_task_init",
-        "prb_id": probe_id.dataset.prb_id,
-        "comment": comment.dataset.comment,
-        "oper": "rm_task",
-        "task_id": id,
-        "user_id": curUsrID
-
-      };  
-
-      ws.send(JSON.stringify(taskData));
-      spinner.classList.remove('d-inline-block');
-      spinner.classList.add('d-none');
-      buttonText.textContent = "Delete";
-      this.disabled = false;
-      document.getElementById('notificationModalLabel').textContent = `Task ${name.dataset.name} Deletion Initiated`;
-      document.getElementById('notif-modal-text').innerText = `task ${name.dataset.name} deletion initiated. You will receive a notification when the task has been successfully deleted.`;
-
-      notificationModal.show();
-    });
-    
+    connectWebSocket();
     const $modals = document.querySelectorAll('.modal');
+
     $modals.forEach(modal => {
       modal.addEventListener('show.bs.modal', function() {
         $modals.forEach(_modal => {

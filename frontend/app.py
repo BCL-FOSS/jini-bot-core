@@ -304,6 +304,7 @@ async def probe(cmp_id, obsc, prb_id):
     ifaces = None
     flows = None
     all_tasks = None
+    probe_url = ""
 
     if prb_id != "default":
         probe_data = await cl_data_db.get_all_data(match=f"*{prb_id}*")
@@ -312,14 +313,16 @@ async def probe(cmp_id, obsc, prb_id):
         flows = await cl_data_db.get_all_data(match=f"flow:{prb_id}:*")
         all_tasks = await cl_data_db.get_all_data(match=f"task:obj:{prb_id}:*")
         api_key = probe_data_dict.get('prb_api_key')
+        probe_url = f"https://{probe_data_dict.get('url')}"
     else:
         probe_data_dict = {'':''}
         flows = {'':''}
         ifaces = []
         api_key = None
+        probe_url = ""
 
     return await render_template("app/probe.html", obsc_key=session.get('url_key') ,
-                                flows=flows, cmp_id=cmp_id, mntr_url=mntr_url, cur_usr=user_data.get('unm'), cur_usr_id=cur_usr_id, ws_url=ws_url, data=user_data, probe_id=prb_id, all_tasks=all_tasks, probe_data=probe_data_dict, ifaces=ifaces, api_key=api_key)
+                                flows=flows, cmp_id=cmp_id, mntr_url=mntr_url, cur_usr=user_data.get('unm'), cur_usr_id=cur_usr_id, ws_url=ws_url, data=user_data, probe_id=prb_id, all_tasks=all_tasks, probe_data=probe_data_dict, ifaces=ifaces, api_key=api_key, probe_api_url=probe_url)
 
 @app.route('/alerts', defaults={'cmp_id': 'bcl','obsc': url_key, 'prb_id': 'default', 'alert_type': 'default'}, methods=['GET', 'POST'])
 @app.route("/alerts/<string:cmp_id>/<string:obsc>/<string:prb_id>/<string:alert_type>", methods=['GET', 'POST'])

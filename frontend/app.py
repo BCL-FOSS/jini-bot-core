@@ -49,8 +49,8 @@ async def retrieve_user_sess_data(sess_id):
             'lnm': cl_sess_data_dict.get('lname'),
             'eml': cl_sess_data_dict.get('eml'),
             'sess_id': sess_id}
-    ws_url = f"wss://{mntr_url}/v1/api/core/channels/users/ws?id={sess_id}&unm={cl_sess_data_dict.get('unm')}"
-    return data, ws_url
+    user_ws_url = f"wss://{mntr_url}/v1/api/core/channels/users/ws?id={sess_id}&unm={cl_sess_data_dict.get('unm')}"
+    return data, user_ws_url
 
 async def retrieve_task_results(prb_id, task):
     task_results = await cl_data_db.get_all_data(match=f"task:result:{prb_id}:{task}*")
@@ -276,10 +276,10 @@ async def logout(auth_id):
         resp.delete_cookie("api_access_token")
         return resp
 
-@app.route('/floweditor', defaults={'cmp_id': 'bcl','obsc': url_key, 'flow_id': 'default', 'prb_id': 'default'}, methods=['GET', 'POST'])
-@app.route("/floweditor/<string:cmp_id>/<string:obsc>/<string:flow_id>/<string:prb_id>", methods=['GET', 'POST'])
+@app.route('/floweditor', defaults={'cmp_id': 'bcl','obsc': url_key, 'flow_id': 'default', 'prb_id': 'default', 'is_probe_bot': 'prb'}, methods=['GET', 'POST'])
+@app.route("/floweditor/<string:cmp_id>/<string:obsc>/<string:flow_id>/<string:prb_id>/<string:is_probe_bot>", methods=['GET', 'POST'])
 @user_login_required
-async def floweditor(cmp_id, obsc, flow_id, prb_id):
+async def floweditor(cmp_id, obsc, flow_id, prb_id, is_probe_bot):
     cur_usr_id = current_client.auth_id
     session["csrf_ready"] = True
     user_data, ws_url = await retrieve_user_sess_data(sess_id=cur_usr_id)
@@ -290,7 +290,7 @@ async def floweditor(cmp_id, obsc, flow_id, prb_id):
 
     return await render_template("app/floweditor.html", obsc_key=session.get('url_key') ,
                                 cmp_id=cmp_id, all_probes=probe_data, mntr_url=mntr_url, 
-                                user=user_data.get('unm'), cur_usr=user_data.get('unm'), ws_url=ws_url, cur_usr_id_id=cur_usr_id, data=user_data, flow_id=flow_id, prb_id=prb_id, cur_usr_id=cur_usr_id)
+                                user=user_data.get('unm'), cur_usr=user_data.get('unm'), user_ws_url=ws_url, cur_usr_id_id=cur_usr_id, data=user_data, flow_id=flow_id, prb_id=prb_id, cur_usr_id=cur_usr_id, is_probe_bot=is_probe_bot)
 
 @app.route('/probe', defaults={'cmp_id': 'bcl','obsc': url_key, 'prb_id': 'default'}, methods=['GET', 'POST'])
 @app.route("/probe/<string:cmp_id>/<string:obsc>/<string:prb_id>", methods=['GET', 'POST'])
@@ -304,8 +304,9 @@ async def probe(cmp_id, obsc, prb_id):
     ifaces = None
     flows = None
     all_tasks = None
-    probe_url = ""
-
+    api_url = None
+    ws_prb_url = None
+  
     if prb_id != "default":
         probe_data = await cl_data_db.get_all_data(match=f"*{prb_id}*")
         probe_data_dict = next(iter(probe_data.values()))
@@ -313,16 +314,17 @@ async def probe(cmp_id, obsc, prb_id):
         flows = await cl_data_db.get_all_data(match=f"flow:{prb_id}:*")
         all_tasks = await cl_data_db.get_all_data(match=f"task:obj:{prb_id}:*")
         api_key = probe_data_dict.get('prb_api_key')
-        probe_url = f"https://{probe_data_dict.get('url')}"
+        api_url = f"https://{probe_data_dict.get('url')}"
+        ws_prb_url = f"wss://{probe_data_dict.get('url')}/v1/api/core/channels/probe/heartbeat/{prb_id}"
     else:
         probe_data_dict = {'':''}
         flows = {'':''}
         ifaces = []
-        api_key = None
-        probe_url = ""
+        api_key = ""
+        ws_prb_url = ""
 
     return await render_template("app/probe.html", obsc_key=session.get('url_key') ,
-                                flows=flows, cmp_id=cmp_id, mntr_url=mntr_url, cur_usr=user_data.get('unm'), cur_usr_id=cur_usr_id, ws_url=ws_url, data=user_data, probe_id=prb_id, all_tasks=all_tasks, probe_data=probe_data_dict, ifaces=ifaces, api_key=api_key, probe_api_url=probe_url)
+                                flows=flows, cmp_id=cmp_id, mntr_url=mntr_url, cur_usr=user_data.get('unm'), cur_usr_id=cur_usr_id, probe_ws_url=ws_prb_url, data=user_data, probe_id=prb_id, all_tasks=all_tasks, probe_data=probe_data_dict, ifaces=ifaces, api_key=api_key, probe_api_url=api_url, user_ws_url=ws_url)
 
 @app.route('/alerts', defaults={'cmp_id': 'bcl','obsc': url_key, 'prb_id': 'default', 'alert_type': 'default'}, methods=['GET', 'POST'])
 @app.route("/alerts/<string:cmp_id>/<string:obsc>/<string:prb_id>/<string:alert_type>", methods=['GET', 'POST'])
@@ -344,7 +346,7 @@ async def alerts(cmp_id, obsc, prb_id, alert_type):
         alerts = await cl_data_db.get_all_data(match=f"alert:*")
 
     return await render_template("app/alerts.html", obsc_key=session.get('url_key') ,
-                                  cmp_id=cmp_id, ws_url=ws_url, cur_usr=user_data.get('unm'), data=user_data, cur_usr_id=cur_usr_id, alerts=alerts)
+                                  cmp_id=cmp_id, ws_url=ws_url, cur_usr=user_data.get('unm'), data=user_data, cur_usr_id=cur_usr_id, alerts=alerts, user_ws_url=ws_url)
 
 @app.route('/chats', defaults={'cmp_id': 'bcl','obsc': url_key, 'usr': 'default', 'prb_id': 'default'}, methods=['GET', 'POST'])
 @app.route("/chats/<string:cmp_id>/<string:obsc>/<string:usr>/<string:prb_id>", methods=['GET', 'POST'])
@@ -362,54 +364,19 @@ async def chats(cmp_id, obsc, usr, prb_id):
     return await render_template("app/chats.html", obsc_key=session.get('url_key') ,
                                   cmp_id=cmp_id, cur_usr_id=cur_usr_id, ws_url=ws_url, cur_usr=user_data.get('unm'), data=user_data, usr=usr, chats=chats)
 
-@app.route('/dashboard', defaults={'cmp_id': 'bcl','obsc': url_key, 'prb_id': 'default'}, methods=['GET', 'POST'])
+@app.route('/dashboard', defaults={'cmp_id': 'bcl','obsc': url_key}, methods=['GET', 'POST'])
 @app.route("/dashboard/<string:cmp_id>/<string:obsc>/<string:prb_id>", methods=['GET', 'POST'])
 @user_login_required
-async def dashboard(cmp_id, obsc, prb_id):
+async def dashboard(cmp_id, obsc):
     cur_usr_id = current_client.auth_id
     session["csrf_ready"] = True
     user_data, ws_url = await retrieve_user_sess_data(sess_id=cur_usr_id)
-
-    trace_results = None
-    perf_results = None
-    scan_results = None
-    pcap_results = None
-    alerts = None
-    devices = None
-    tux_count = 0
-    win_count = 0
-    android_count = 0
-    iphone_count = 0
-
     probe_data = await cl_data_db.get_all_data(match=f"prb:*")
-
     if probe_data is None:
         probe_data = {"":""}
 
-    trace_results = await retrieve_task_results(prb_id, "trcrt")
-    perf_results = await retrieve_task_results(prb_id, "test_clnt")
-    scan_results = await retrieve_task_results(prb_id, "scan")
-    pcap_results = await retrieve_task_results(prb_id, "pcap")
-    alerts = await cl_data_db.get_all_data(match=f"alert:{prb_id}:*")
-    devices = await cl_data_db.get_all_data(match=f"netmap:result:{prb_id}:devices")
-
-    if trace_results is None:
-        trace_results = {'':''}
-    if perf_results is None:
-        perf_results = {'':''}
-    if scan_results is None:
-        scan_results = {'':''}
-    if pcap_results is None:
-        pcap_results = {'':''}
-    if alerts is None:
-        alerts = {'':''}
-    if devices is None:
-        devices = {'':''}
-
-    ws_prb_url = f"wss://{mntr_url}/v1/api/core/channels/probe/heartbeat/{prb_id}?sess_id={cur_usr_id}"
-
     return await render_template("app/dashboard.html", obsc_key=session.get('url_key') ,
-                                  cmp_id=cmp_id, cur_usr_id=cur_usr_id, ws_url=ws_url, cur_usr=user_data.get('unm'), data=user_data, prb_id=prb_id, trace_results=trace_results, perf_results=perf_results, scan_results=scan_results, pcap_results=pcap_results, alerts=alerts, devices=devices, ws_prb_url=ws_prb_url, tux_count=tux_count, win_count=win_count, android_count=android_count, iphone_count=iphone_count, options=probe_data)
+                                  cmp_id=cmp_id, cur_usr_id=cur_usr_id, ws_url=ws_url, cur_usr=user_data.get('unm'), data=user_data,  options=probe_data)
 
 @app.errorhandler(CSRFError)
 async def handle_csrf_error(e):

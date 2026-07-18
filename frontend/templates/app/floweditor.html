@@ -58,7 +58,7 @@
               </button>
               <ul class="dropdown-menu" aria-labelledby="probeDropdown">
                 {% for probe in all_probes.values() %}
-                  <li><div class="dropdown-item drag-drawflow" draggable="true" ondragstart="drag(event)" data-node="{{ probe.prb_id }}" value="{{ probe.prb_id }}" data-api="{{ probe.prb_api_key }}"><i class="fas fa-mouse"></i>Site: {{ probe.site }} | Name: {{ probe.name }}</div></li>
+                  <li><div class="dropdown-item drag-drawflow" draggable="true" ondragstart="drag(event)" id="{{ probe.prb_id }}" data-url="{{ probe.url }}" data-node="{{ probe.prb_id }}" data-api="{{ probe.prb_api_key }}"><i class="fas fa-mouse"></i>Site: {{ probe.site }} | Name: {{ probe.name }}</div></li>
                 {% endfor %}
               </ul>
             </div>
@@ -180,7 +180,7 @@
     const mntrURL = "{{ mntr_url }}";
     const flowID = "{{ flow_id }}";
     const prbID = "{{ prb_id }}";
-
+    const isProbeBot= "{{ is_probe_bot }}";
     let nodeProbeCounter = 0;
     let currentProbeNodes = {};
     let currentSelectedProbe = null;
@@ -192,6 +192,8 @@
     let botCounter = 0;
     let currentBotNodes = {};
     let currentSelectedBot = null;
+    const selectedProbeURL="{{ probe_api_url }}";
+    const flowNotificationModal = new bootstrap.Modal(document.getElementById('notificationModal'));
 
     function setFlowSchedule(taskData) {
       const scheduleDays = document.getElementById('scheduler-days');
@@ -231,7 +233,6 @@
       document.getElementById('scheduler-dom').value = "";
     }
 
-    const flowNotificationModal = new bootstrap.Modal(document.getElementById('notificationModal'));
     const flowSchedulerModal = new bootstrap.Modal(document.getElementById('schedulerModal'));
     const flowInit = document.getElementById('scheduler-init');
     const flowConfirmModal = new bootstrap.Modal(document.getElementById('flowConfirmModal'));
@@ -244,7 +245,7 @@
     if (flowID !== "default") {
       const id = flowID;
       const payload = { id: id };    
-      const resp = await fetch(`https://${mntrURL}/v1/api/core/probes/exec/${prbID}/flows/load?usr={{ cur_usr }}&sess_id={{ cur_usr_id }}`, {method:'POST', credentials: "same-origin", body:JSON.stringify(payload)});
+      const resp = await fetch(`https://${selectedProbeURL}/v1/api/flows/load`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(payload)});
       const j = await resp.json();
 
       if (resp.ok) {
@@ -256,7 +257,7 @@
         document.getElementById('notificationModalLabel').textContent = "Flow Loaded Successfully";
         document.getElementById('notif-modal-text').textContent = `The flow: "${j.name}" has been loaded successfully.`;
 
-        notificationModal.show();
+        flowNotificationModal.show();
       }
     } else {
       const dataToImport =  {"drawflow":{"Home":{"data":{
@@ -378,49 +379,58 @@
     });
 
     flowInit.addEventListener('click', async () => {
-      const savename = document.getElementById('flow-save-name').value;
-      let resp = null;
+      const spinner = this.querySelector('.spinner-grow');
+      const buttonText = this.querySelector('.prb-tsk-trc-button-text');
 
-      const payload = {};
+      spinner.classList.remove('d-none');
+      spinner.classList.add('d-inline-block');
+      buttonText.textContent = "Initializing Task...";      
+      this.disabled = true;
+
+      const savename = document.getElementById('flow-save-name').value;
 
       if (savename !== null && savename !== "") {
         const data = editor.export();
         const flow = JSON.stringify(data, null,4);
 
-        if (flowID !== "default") {
-            payload.flow = flow;
-            payload.id = flowID;
-            payload.name = savename;
-            resp = await fetch(`https://${mntrURL}/v1/api/core/probes/exec/${prbID}/flows/edit?usr={{ cur_usr }}&sess_id={{ cur_usr_id }}`, {method:'POST', credentials: "same-origin", body:JSON.stringify(payload)});
-    
-        } else {
-            payload.flow = flow;
-            payload.probe = prbID;
-            payload.name = savename;
-            resp = await fetch(`https://${mntrURL}/v1/api/core/probes/exec/${prbID}/flows/save?usr={{ cur_usr }}&sess_id={{ cur_usr_id }}`, {method:'POST', credentials: "same-origin", body:JSON.stringify(payload)});
-        }
+        const payload = {
+          "flow": flow,
+          "id": flowID,
+          "name": savename,
+          "prb_id": prbID,
+          "user_id": "{{ cur_usr_id }}"
+        };
+
+        const newFlowResp = await fetch(`https://${selectedProbeURL}/v1/api/flows/new`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(payload)});
           
-        if (resp.ok) {
-            document.getElementById('notificationModalLabel').textContent = "Flow Saved Successfully";
-
-            document.getElementById('notif-modal-text').textContent = `The flow: "${savename}" has been saved successfully and assigned to probe: "${prbID}".`;
-
-            notificationModal.show();
+        if (newFlowResp.ok) {
+          spinner.classList.remove('d-inline-block');
+          spinner.classList.add('d-none');
+          buttonText.textContent = "Initialize Task";
+          this.disabled = false;
+          document.getElementById('notificationModalLabel').textContent = "Flow Saved Successfully";
+          document.getElementById('notif-modal-text').textContent = `The flow: "${savename}" has been saved successfully and assigned to probe: "${prbID}".`;
+          flowNotificationModal.show();
+          return;
         } else {
-            document.getElementById('notificationModalLabel').textContent = "Error Saving Flow";
-
-            document.getElementById('notif-modal-text').textContent = `There was an error saving the flow: "${savename}". Please try again.`;
-
-            notificationModal.show();
-            return false;
+          spinner.classList.remove('d-inline-block');
+          spinner.classList.add('d-none');
+          buttonText.textContent = "Initialize Task";
+          this.disabled = false;
+          document.getElementById('notificationModalLabel').textContent = "Error Saving Flow";
+          document.getElementById('notif-modal-text').textContent = `There was an error saving the flow: "${savename}". Please try again.`;
+          flowNotificationModal.show();
+          return;
         }
       } else {
+        spinner.classList.remove('d-inline-block');
+        spinner.classList.add('d-none');
+        buttonText.textContent = "Initialize Task";
+        this.disabled = false;
         document.getElementById('notificationModalLabel').textContent = "No Flow Name";
-
         document.getElementById('notif-modal-text').textContent = `Please enter a name for your flow before saving.`;
-
-        notificationModal.show();
-        return false;
+        flowNotificationModal.show();
+        return;
       }
     });
 
@@ -463,12 +473,11 @@
         const data = ev.dataTransfer.getData("node");
         addNodeToDrawFlow(data, ev.clientX, ev.clientY);
       }
-
     }
 
     function addNodeToDrawFlow(name, pos_x, pos_y) {
       if(editor.editor_mode === 'fixed') {
-        return false;
+        return;
       }
       pos_x = pos_x * ( editor.precanvas.clientWidth / (editor.precanvas.clientWidth * editor.zoom)) - (editor.precanvas.getBoundingClientRect().x * ( editor.precanvas.clientWidth / (editor.precanvas.clientWidth * editor.zoom)));
       pos_y = pos_y * ( editor.precanvas.clientHeight / (editor.precanvas.clientHeight * editor.zoom)) - (editor.precanvas.getBoundingClientRect().y * ( editor.precanvas.clientHeight / (editor.precanvas.clientHeight * editor.zoom)));
@@ -476,13 +485,21 @@
       if (typeof name === "string" && name.startsWith("prb:")) {
         if (nodeProbeCounter === 3) {
           document.getElementById('notificationModalLabel').textContent = "Probe Limit Reached";
-
           document.getElementById('notif-modal-text').textContent = `You have reached the maximum number of probes allowed. Please remove a probe before adding another one.`;
-
-          notificationModal.show();
-          return false;
+          flowNotificationModal.show();
+          return;
         } else {
-          const probe = `
+          if (isProbeBot === "prb") {
+            document.getElementById('notificationModalLabel').textContent = "Alert";
+            document.getElementById('notif-modal-text').textContent = `Calling remote probe tools from a probe bot is not allowed. Please create a general bot for remote tool calling.`;
+            flowNotificationModal.show();
+            return;
+          } else {
+            const selectedProbeTools = document.getElementById(name);
+            const probeUrl = selectedProbeTools.dataset.url;
+            const probeApi =selectedProbeTools.dataset.api;
+
+            const probe = `
               <div class="title-box">Remote Probe</div>
               <div class="box" style="background-color: #8b7da8;">
                 <nav>
@@ -589,7 +606,8 @@
                             <input type="number" class="form-control" placeholder="Enter minimum vulnerability score to report (0-10)" df-prb-scanvulnscore>
                           </div>
                           <div class="col-6 mb-3">
-                            <label class="form-label">Command Options</label>
+                            <label class="form-label">Custom nmap Command</label>
+                            <p class="lead">Enter any nmap options to create your own custom command (do not enter 'nmap' in front of your options.).</p>
                             <input type="text" class="form-control" placeholder="Enter command options" df-prb-scanoptions>
                           </div>
                         </div>
@@ -668,8 +686,9 @@
                   </div>              
               </div>
               `;
-          const probe_data = { type: 'probe', name: name };
-          editor.addNode(name, 0, 0, pos_x, pos_y, name, probe_data, probe);
+            const probe_data = { type: 'probe', name: name, url: probeUrl, api_key: probeApi };
+            editor.addNode(name, 0, 0, pos_x, pos_y, name, probe_data, probe);
+          }
         }
       } else if (typeof name === 'string' && name === 'slack' || name === 'jira' || name === 'email') {
         const alert = `
@@ -692,13 +711,12 @@
                   <div class="form-floating mb-3">
                     <label class="form-label">Select Scan Type</label>
                     <select class="form-select" aria-label="Select Scan Type" df-scan-type>
-                      <option value="scan_arp">ARP Scan</option>
-                      <option value="scan_custom">Custom Scan</option>
-                      <option value="scan_dev_id">Device Identification Scan</option> 
-                      <option value="scan_dev_fngr">Device Fingerprint Scan</option>
-                      <option value="scan_full">Full Network Scan</option>
-                      <option value="scan_snmp">SNMP Scan</option>
-                      <option value="scan_port">Port Scan</option>
+                      <option value="scan_vuln">Vulnerability Assessment</option>
+                      <option value="scan_cust">Custom Scan</option>
+                      <option value="scan_os">OS Discovery</option> 
+                      <option value="scan_srvc">Host Service(s) Discovery</option>
+                      <option value="scan_map">Host Discovery</option>
+                      <option value="scan_snmp">SNMP Discovery</option>
                     </select>
                   </div>
                   <div class="form-floating mb-3">
@@ -720,42 +738,42 @@
                   <div class="form-floating mb-3">
                     <div class="row mb-3">
                       <div class="col-6 mb-3">
-                        <label class="form-check-label">Limit Device Fingerprinting?</label>
-                        <select class="form-select" df-scan-fplimit>
-                          <option value="y">yes</option>
-                          <option value="n">no</option>
-                        </select>
+                        <label class="form-label">Custom nmap Command</label>
+                        <p class="lead">Enter any nmap options to create your own custom command (do not enter 'nmap' in front of your options.).</p>
+                        <input type="text" class="form-control" df-scan-options>
                       </div>
                       <div class="col-6 mb-3">
-                        <label class="form-check-label">Reduce Device Identification Noise?</label>
-                        <select class="form-select" df-scan-devidnoise>
-                          <option value="y">yes</option>
-                          <option value="n">no</option>
-                        </select>
+                        <label class="form-check-label">Vulnerability Assessment Score</label>
+                        <p class="lead">Enter the minimum CVSS score the scan should flag in the report.</p>
+                        <input type="text" class="form-control" df-scan-vulnscore>
                       </div>
                     </div>
                   </div>
                   <div class="form-floating mb-3">
                     <div class="row mb-3">
                       <div class="col-6 mb-3">
+                        <h6>Host Discovery Settings</h6>
+                        <label class="form-label">SYN Scan Ports</label>
+                        <p class="lead">Enter comma separated list of ports to run SYN scan against ie '22,23,80,443,830,3389'</p>
+                        <input type="text" class="form-control" df-scan-map-syn>
+                      </div>
+                      <div class="col-6 mb-3">
+                        <label class="form-check-label">ACK Scan ports</label>
+                        <p class="lead">Enter comma separated list of ports to run ACK scan against ie '80,443'</p>
+                        <input type="text" class="form-control" placeholder="Enter SNMP community string" df-scan-map-ack>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="form-floating mb-3">
+                    <div class="row mb-3 text-align-center">
+                      <h6>SNMP Disocvery Settings</h6>
+                      <div class="col-6 mb-3">
                         <label class="form-label">SNMP scripts</label>
-                        <input type="text" class="form-control" placeholder="Enter SNMP scripts to execute or all for default" df-scan-snmpscripts>
+                        <input type="text" class="form-control" placeholder="Enter comma separated list of custom nmap SNMP scripts to run ie 'snmp-info,snmp-sysdescr'" df-scan-snmpscripts>
                       </div>
                       <div class="col-6 mb-3">
                         <label class="form-check-label">SNMP Community</label>
                         <input type="text" class="form-control" placeholder="Enter SNMP community string" df-scan-snmpcommunity>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3">
-                      <div class="col-6 mb-3">
-                        <label class="form-label">Command Options</label>
-                        <input type="text" class="form-control" placeholder="Enter command options" df-scan-options>
-                      </div>
-                      <div class="col-6 mb-3">
-                        <label class="form-label">Ports to scan</label>
-                        <input type="text" class="form-control" placeholder="Enter ports to scan" df-scan-ports>
                       </div>
                     </div>
                   </div>

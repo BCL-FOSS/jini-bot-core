@@ -14,24 +14,21 @@
           <div class="row">
             <div class="col-md-6 col-lg-5 col-xl-4 mb-4 mb-md-0">
               <div class="p-3">
-             
-                <!--
                 <div class="mb-3">
                   <label for="mcp-dropdown" class="form-label">Select Probe:</label>
                   <select id="mcp-dropdown" class="form-select">
                     {% for opt in options.values() %}
-                      <option value="{{ opt.url }}/llm/mcp" data-pid="{{ opt.prb_id }}" data-api="{{ opt.prb_api_key }}">
+                      <option data-url="{{ opt.url }}/llm/mcp" data-pid="{{ opt.prb_id }}" data-api="{{ opt.prb_api_key }}">
                         {{ opt.name }}
                       </option>
                     {% endfor %}
                   </select>
-                </div> -->
-             
+                </div>
                 <div style="position: relative; height: 400px; overflow-y:auto;" id="mcp-list-container">
                   <label for="mcp-list" class="form-label">Select Probe:</label>
                   <ul class="list-unstyled mb-0" id="mcp-list">
                     {% for opt in options.values() %}
-                      <li class="p-2 border-bottom" data-value="{{ opt.url }}/llm/mcp" data-pid="{{ opt.prb_id }}" data-api="{{ opt.prb_api_key }}">
+                      <li class="p-2 border-bottom" data-url="{{ opt.url }}/llm/mcp" data-pid="{{ opt.prb_id }}" data-api="{{ opt.prb_api_key }}">
                         <a href="#!" class="d-flex justify-content-between">
                           <div class="d-flex flex-row">
                             <img src="{{ url_for('static', filename='img/bcl/' + opt.status + '.svg') }}" alt="probe-status"
@@ -41,7 +38,6 @@
                               <p class="small text-muted">Site: {{ opt.site }}</p>
                               <p class="small text-muted">Host Ports: {{ opt.iface_list }}</p>
                               <p class="small text-muted">URL: {{ opt.url }}/llm/mcp</p>
-                              
                             </div>
                             <div class="input-group mb-3">
                               <a href="{{ url_for('dashboard', cmp_id=cmp_id, obsc=obsc_key, prb_id=opt.prb_id) }}" target="_blank" class="btn btn-sm btn-outline-primary ms-2">
@@ -446,116 +442,11 @@
 <script type="text/javascript">
   const probeDeleteButtons = document.querySelectorAll(".probe-delete-btn");
   const deleteProbeButton = document.getElementById('delete-probe');
-
   const curUsrID = "{{ cur_usr_id }}";
   const mntrURL = "{{ mntr_url }}";
   const wsPrbURLMon = "{{ ws_prb_url }}";
-  let probeWS = new WebSocket(wsPrbURLMon);
+  let selectedProbe = null;
   const notificationModal = new bootstrap.Modal(document.getElementById('notificationModal'));
-
-  function addNotification(data) {
-    const list = document.getElementById('notif-list');
-    if (!list) return;
-
-    const li = document.createElement('li');
-    li.className = 'mb-2';
-    li.innerHTML = `
-        <a class="dropdown-item border-radius-md" href="javascript:;">
-          <div class="d-flex py-1">
-            <div class="avatar avatar-sm bg-gradient-warning me-3 my-auto" style="display:flex;align-items:center;justify-content:center;border-radius:6px;width:36px;height:36px;">
-              <i class="fa fa-exclamation-triangle text-white" aria-hidden="true" style="font-size:14px;"></i>
-            </div>
-            <div class="d-flex flex-column justify-content-center">
-              <h6 class="text-sm font-weight-normal mb-1">
-                <span class="font-weight-bold">${data.alert_type}</span> Alert
-              </h6>
-              <h4 class="text-sm font-weight-normal mb-0">
-                Probe: ${data.name}
-                Site: ${data.site}
-              </h4>
-              <p class="text-xs text-secondary mb-0">
-                <i class="fa fa-clock me-1"></i>
-                ${data.timestamp}
-              </p>
-            </div>
-          </div>
-        </a>
-      `;
-
-    if (list.firstChild) {
-      list.insertBefore(li, list.firstChild);
-    } else {
-      list.appendChild(li);
-    }
-
-    const bell = document.getElementById('notif-bell');
-    if (bell) {
-      bell.classList.add('bell-flash');
-
-      setTimeout(() => {
-        bell.classList.remove('bell-flash');
-      }, 3000);
-
-      const dropdownBtn = document.getElementById('dropdownMenuButton');
-      if (dropdownBtn) {
-        const removeFlashOnOpen = () => {
-          bell.classList.remove('bell-flash');
-          dropdownBtn.removeEventListener('click', removeFlashOnOpen);
-        };
-        dropdownBtn.addEventListener('click', removeFlashOnOpen);
-      }
-    }
-  }
-
-  function connectProbeWebSocket() {
-
-      probeWS.onopen = async () => {
-        console.log("WebSocket connected");
-        await visualizeNetworkScan(JSON.parse("{{ devices | tojson }}"), "network-map");
-
-        probeWS.onerror = async (err) => {
-          console.error("WebSocket error:", err);
-          await visualizeNetworkScan(JSON.parse("{{ devices | tojson }}"), "network-map");
-        };
-
-        probeWS.onclose = async (event) => {
-          console.warn("WebSocket closed:", event.code, event.reason);
-          await visualizeNetworkScan(JSON.parse("{{ devices | tojson }}"), "network-map");
-        };
-      };
-
-      probeWS.onmessage = async (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          console.info(data);
-
-          switch (data.map_type) {
-              case "trace":
-                await visualizeTraceroute(data.map);
-                break;
-              case "perf":
-                await visualizePerformanceTest(data.map);
-                break;
-              case "scan":
-                await visualizeNetworkScan(data.map, "network-scan");
-                break;
-              case "pcap":
-                await visualizePacketCapture(data.map);
-                break;
-          }
-
-          if (data.map_type === "full"){
-            await visualizeNetworkScan(data.map, "network-map");
-          }
-
-        } catch (err) {
-          console.error("Invalid WS data:", err, event.data);
-        }
-      };
-  }
-
-  connectProbeWebSocket();
-
   const viewTraceButton = document.getElementById('view-trace-button');
   const viewPerfButton = document.getElementById('view-perf-button');
   const viewScanButton = document.getElementById('view-scan-button');
@@ -679,13 +570,20 @@
       if (chatWin) chatWin.style.display = "block";
     }
 
+  document.getElementById("mcp-dropdown").addEventListener("change", e => {
+      selectedProbe.dataset.url = e.target.dataset.url;
+      selectedProbe.dataset.pid = e.target.dataset.pid;
+      selectedProbe.dataset.api = e.target.dataset.api;
+      showChat(selectedProbe.dataset.url);
+    });
+
   document.querySelectorAll("#mcp-list li").forEach(li => {
       li.addEventListener("click", () => {
-        selectedProbe.value = li.dataset.value;
-        document.getElementById("mcp-dropdown").value = selectedProbe.value;
+        selectedProbe.dataset.url = li.dataset.url;
+        document.getElementById("mcp-dropdown").value = selectedProbe.dataset.url;
         selectedProbe.dataset.pid = li.dataset.pid;
         selectedProbe.dataset.api = li.dataset.api;
-        showChat(selectedProbe.value);
+        showChat(selectedProbe.dataset.url);
       });
     });
 </script>

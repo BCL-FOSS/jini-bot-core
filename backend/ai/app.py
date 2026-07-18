@@ -217,6 +217,42 @@ async def chat():
 
     return jsonify(response_payload)
 
+@app.route('/v1/analysis', methods=['POST'])
+async def analysis():
+    data = await request.get_json()
+    model = data.get("model")
+    instructions = data.get("instructions")
+    bot_prompt = data.get("bot_prompt")
+
+    # --- Step C: Send conversation to Ollama ---
+    conversation = [
+        {"role": "system", "content": instructions},
+        {"role": "user", "content": bot_prompt},
+    ]
+
+    ollama_out_clean = await chat_with_ollama(conversation, model)
+    
+    response_payload={
+            "id": f"bot:analysis:{datetime.now(timezone.utc)}:{uuid.uuid4()}",
+            "user_msg": bot_prompt,
+            "output_text": ollama_out_clean
+        }
+
+    logger.info(response_payload)
+    
+    parsed = None
+    try:
+        parsed = json.loads(ollama_out_clean)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", ollama_out_clean, re.S)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+            except Exception as e:
+                logger.warning(f"Could not parse JSON block: {e}")
+
+    return parsed
+
 @app.route('/v1/stats', methods=['GET'])
 async def get_stats():
     """Get RAG engine statistics"""

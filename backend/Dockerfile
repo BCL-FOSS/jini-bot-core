@@ -14,6 +14,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ /home/quart/
 
+WORKDIR /home/quart/utils
+
+RUN git clone https://github.com/BCL-FOSS/cli-parser.git
+
 RUN chmod +x boot.sh 
 
 ENTRYPOINT ["sh", "./boot.sh"]

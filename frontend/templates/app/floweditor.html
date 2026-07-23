@@ -179,7 +179,7 @@
   <script>
     const mntrURL = "{{ mntr_url }}";
     const flowID = "{{ flow_id }}";
-    const prbID = "{{ prb_id }}";
+    
     const isProbeBot= "{{ is_probe_bot }}";
     let nodeProbeCounter = 0;
     let currentProbeNodes = {};
@@ -189,10 +189,10 @@
     let currentAlertNodes = {};
     let currentSelectedAlert = null;
 
-    let botCounter = 0;
-    let currentBotNodes = {};
-    let currentSelectedBot = null;
-    const selectedProbeURL="{{ probe_api_url }}";
+    let toolCounter = 0;
+    let currentToolNodes = {};
+    let currentSelectedTool = null;
+    
     const flowNotificationModal = new bootstrap.Modal(document.getElementById('notificationModal'));
 
     function setFlowSchedule(taskData) {
@@ -243,20 +243,21 @@
     editor.start();
 
     if (flowID !== "default") {
-      const id = flowID;
-      const payload = { id: id };    
-      const resp = await fetch(`https://${selectedProbeURL}/v1/api/flows/load`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(payload)});
-      const j = await resp.json();
-
-      if (resp.ok) {
-
+      const payload = { id: flowID };  
+      let flowLoadResp = null
+      if (isProbeBot === 'y') {
+        const selectedProbeURL="{{ probe_api_url }}";
+        flowLoadResp = await fetch(`https://${selectedProbeURL}/v1/api/flows/load`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(payload)});
+      } else {
+        flowLoadResp = await fetch(`https://${mntrURL}/v1/api/core/flows/load?sess_id={{ cur_usr_id }}`, {method:'POST', credentials:"same-origin", headers: {'Content-Type': 'application/json'}, body:JSON.stringify(payload)});
+      }
+      const flowLoadRespJson = await flowLoadResp.json();
+      if (flowLoadResp.ok) {
         editor.clearModuleSelected();
         editor.import(JSON.parse(j.flow));
-
         document.getElementById('flow-save-name').value = j.name;
         document.getElementById('notificationModalLabel').textContent = "Flow Loaded Successfully";
         document.getElementById('notif-modal-text').textContent = `The flow: "${j.name}" has been loaded successfully.`;
-
         flowNotificationModal.show();
       }
     } else {
@@ -264,6 +265,7 @@
             "1":{"id":1,"name":"smartbot","data":{type: 'agent', name: 'smartbot'},"class":"smartbot","html":`
             <div>
               <div class="title-box"><i class="fas fa-robot"></i>smartbot</div>
+              <div id="is_probe_bot" data-botType="n"></div>
               <div class="box">
                 <div class="form-floating mb-3">
                   <label class="form-label">Bot Name</label>
@@ -293,10 +295,10 @@
         alertCounter++;
         currentAlertNodes[id] = currentSelectedProbe;
         currentSelectedAlert = currentSelectedProbe;
-      } else if (currentSelectedProbe.data.type === 'smartbot') {
-        botCounter++;
-        currentBotNodes[id] = currentSelectedProbe;
-        currentSelectedBot = currentSelectedProbe;
+      } else if (currentSelectedProbe.data.type === 'tool') {
+        toolCounter++;
+        currentToolNodes[id] = currentSelectedProbe;
+        currentSelectedTool = currentSelectedProbe;
       } else {
         console.log("Node created" + id);
       }
@@ -312,10 +314,10 @@
         delete currentAlertNodes[id];
         alertCounter--;
         currentSelectedAlert = null;
-      } else if (currentBotNodes.hasOwnProperty(id)) {
-        delete currentBotNodes[id];
-        botCounter--;
-        currentSelectedBot = null;
+      } else if (currentToolNodes.hasOwnProperty(id)) {
+        delete currentToolNodes[id];
+        toolCounter--;
+        currentSelectedTool = null;
       } else {
         console.log("Node removed" + id);
       }
@@ -392,36 +394,44 @@
       if (savename !== null && savename !== "") {
         const data = editor.export();
         const flow = JSON.stringify(data, null,4);
+        let newFlowResp = null;
 
         const payload = {
           "flow": flow,
           "id": flowID,
           "name": savename,
-          "prb_id": prbID,
-          "user_id": "{{ cur_usr_id }}"
+          "user_id": "{{ cur_usr_id }}",
+          "type": isProbeBot,
         };
 
-        const newFlowResp = await fetch(`https://${selectedProbeURL}/v1/api/flows/new`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(payload)});
-          
-        if (newFlowResp.ok) {
-          spinner.classList.remove('d-inline-block');
-          spinner.classList.add('d-none');
-          buttonText.textContent = "Initialize Task";
-          this.disabled = false;
-          document.getElementById('notificationModalLabel').textContent = "Flow Saved Successfully";
-          document.getElementById('notif-modal-text').textContent = `The flow: "${savename}" has been saved successfully and assigned to probe: "${prbID}".`;
-          flowNotificationModal.show();
-          return;
+        if (isProbeBot === 'y') {
+          const prbID = "{{ prb_id }}";
+          payload["prb_id"] = prbID;
+          newFlowResp = await fetch(`https://${selectedProbeURL}/v1/api/flows/new`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(payload)});
         } else {
-          spinner.classList.remove('d-inline-block');
-          spinner.classList.add('d-none');
-          buttonText.textContent = "Initialize Task";
-          this.disabled = false;
-          document.getElementById('notificationModalLabel').textContent = "Error Saving Flow";
-          document.getElementById('notif-modal-text').textContent = `There was an error saving the flow: "${savename}". Please try again.`;
-          flowNotificationModal.show();
-          return;
+          newFlowResp = await fetch(`https://${mntrURL}/v1/api/core/flows/save?sess_id={{ cur_usr_id }}`, {method: "POST", credentials:"same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
         }
+
+        if (newFlowResp.ok) {
+            spinner.classList.remove('d-inline-block');
+            spinner.classList.add('d-none');
+            buttonText.textContent = "Initialize Task";
+            this.disabled = false;
+            document.getElementById('notificationModalLabel').textContent = "Flow Saved Successfully";
+            document.getElementById('notif-modal-text').textContent = `The flow: "${savename}" has been saved successfully and assigned to probe: "${prbID}".`;
+            flowNotificationModal.show();
+            return;
+          } else {
+            spinner.classList.remove('d-inline-block');
+            spinner.classList.add('d-none');
+            buttonText.textContent = "Initialize Task";
+            this.disabled = false;
+            document.getElementById('notificationModalLabel').textContent = "Error Saving Flow";
+            document.getElementById('notif-modal-text').textContent = `There was an error saving the flow: "${savename}". Please try again.`;
+            flowNotificationModal.show();
+            return;
+          }
+        
       } else {
         spinner.classList.remove('d-inline-block');
         spinner.classList.add('d-none');
@@ -489,7 +499,7 @@
           flowNotificationModal.show();
           return;
         } else {
-          if (isProbeBot === "prb") {
+          if (isProbeBot === "n") {
             document.getElementById('notificationModalLabel').textContent = "Alert";
             document.getElementById('notif-modal-text').textContent = `Calling remote probe tools from a probe bot is not allowed. Please create a general bot for remote tool calling.`;
             flowNotificationModal.show();
@@ -701,250 +711,260 @@
             const alert_data = {type: 'alert', name: name}
             editor.addNode(name, 0, 0, pos_x, pos_y, name, alert_data, alert);
       } else {
-        switch (name) {
-          case 'scans':
-            const scan = `
-            <div>
-              <div class="title-box"><i class="fab fa-telegram-plane"></i>Network Scans</div>
-              <div class="box">
-                <form method="POST">
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Select Scan Type</label>
-                    <select class="form-select" aria-label="Select Scan Type" df-scan-type>
-                      <option value="scan_vuln">Vulnerability Assessment</option>
-                      <option value="scan_cust">Custom Scan</option>
-                      <option value="scan_os">OS Discovery</option> 
-                      <option value="scan_srvc">Host Service(s) Discovery</option>
-                      <option value="scan_map">Host Discovery</option>
-                      <option value="scan_snmp">SNMP Discovery</option>
-                    </select>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3">
-                      <div class="col-6">
-                        <label class="form-label">Target</label>
-                        <input type="text" class="form-control" placeholder="Enter target for the scan" df-scan-target>
-                      </div>
-                      <div class="col-6 mb-3">
-                        <label class="form-label">Use Default Interface?</label>
-                        <select class="form-select mb-3" df-scan-useiface>
-                          <option value="y">yes</option>
-                          <option value="n">no</option>
-                        </select>
-                        <input type="text" class="form-control" placeholder="Enter target interface for scan (optional)" df-scan-iface>
-                      </div>
-                    </div> 
-                  </div>
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3">
-                      <div class="col-6 mb-3">
-                        <label class="form-label">Custom nmap Command</label>
-                        <p class="lead">Enter any nmap options to create your own custom command (do not enter 'nmap' in front of your options.).</p>
-                        <input type="text" class="form-control" df-scan-options>
-                      </div>
-                      <div class="col-6 mb-3">
-                        <label class="form-check-label">Vulnerability Assessment Score</label>
-                        <p class="lead">Enter the minimum CVSS score the scan should flag in the report.</p>
-                        <input type="text" class="form-control" df-scan-vulnscore>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3">
-                      <div class="col-6 mb-3">
-                        <h6>Host Discovery Settings</h6>
-                        <label class="form-label">SYN Scan Ports</label>
-                        <p class="lead">Enter comma separated list of ports to run SYN scan against ie '22,23,80,443,830,3389'</p>
-                        <input type="text" class="form-control" df-scan-map-syn>
-                      </div>
-                      <div class="col-6 mb-3">
-                        <label class="form-check-label">ACK Scan ports</label>
-                        <p class="lead">Enter comma separated list of ports to run ACK scan against ie '80,443'</p>
-                        <input type="text" class="form-control" placeholder="Enter SNMP community string" df-scan-map-ack>
-                      </div>
-                    </div>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3 text-align-center">
-                      <h6>SNMP Disocvery Settings</h6>
-                      <div class="col-6 mb-3">
-                        <label class="form-label">SNMP scripts</label>
-                        <input type="text" class="form-control" placeholder="Enter comma separated list of custom nmap SNMP scripts to run ie 'snmp-info,snmp-sysdescr'" df-scan-snmpscripts>
-                      </div>
-                      <div class="col-6 mb-3">
-                        <label class="form-check-label">SNMP Community</label>
-                        <input type="text" class="form-control" placeholder="Enter SNMP community string" df-scan-snmpcommunity>
-                      </div>
-                    </div>
-                  </div>
-                </form>
-              </div>
-            </div>
-              `;
-            const scan_data = {type: 'tool', name: name}
-            editor.addNode(name, 0, 0, pos_x, pos_y, name, scan_data, scan );
-            break;
-          case 'pcaps':
-            const pcap = `
-            <div>
-              <div class="title-box"><i class="fab fa-telegram-plane"></i>Packet Capture</div>
-              <div class="box">
-                <form method="POST">
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3">
-                      <div class="col-6 mb-3">
-                        <label class="form-label">Capture Mode</label>
-                        <select class="form-select" df-pcap-mode>
-                          <option value="pcap_lcl">Local Capture</option>
-                          <option value="pcap_tux">Remote Linux Capture</option>
-                          <option value="pcap_win">Remote Windows Capture</option>
+        if (isProbeBot === "y") {
+            document.getElementById('notificationModalLabel').textContent = "Alert";
+            document.getElementById('notif-modal-text').textContent = `Calling local probe tools from a general bot is not allowed. If you wish to have the bot work on a specific probe, please access the flow editor from the probe  dashboard.`;
+            flowNotificationModal.show();
+            return;
+          } else {
+
+            switch (name) {
+              case 'scans':
+                const scan = `
+                <div>
+                  <div class="title-box"><i class="fab fa-telegram-plane"></i>Network Scans</div>
+                  <div class="box">
+                    <form method="POST">
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Select Scan Type</label>
+                        <select class="form-select" aria-label="Select Scan Type" df-scan-type>
+                          <option value="scan_vuln">Vulnerability Assessment</option>
+                          <option value="scan_cust">Custom Scan</option>
+                          <option value="scan_os">OS Discovery</option> 
+                          <option value="scan_srvc">Host Service(s) Discovery</option>
+                          <option value="scan_map">Host Discovery</option>
+                          <option value="scan_snmp">SNMP Discovery</option>
                         </select>
                       </div>
-                      <div class="col-6 mb-3">
-                        <label class="form-label">Use Default Local Interface</label>
-                        <select class="form-select mb-3" df-pcap-useiface>
-                          <option value="y">yes</option>
-                          <option value="n">no</option>
-                        </select>
-                        <input type="text" class="form-control" placeholder="Enter local interface to use." df-pcap-iface>
+                      <div class="form-floating mb-3">
+                        <div class="row mb-3">
+                          <div class="col-6">
+                            <label class="form-label">Target</label>
+                            <input type="text" class="form-control" placeholder="Enter target for the scan" df-scan-target>
+                          </div>
+                          <div class="col-6 mb-3">
+                            <label class="form-label">Use Default Interface?</label>
+                            <select class="form-select mb-3" df-scan-useiface>
+                              <option value="y">yes</option>
+                              <option value="n">no</option>
+                            </select>
+                            <input type="text" class="form-control" placeholder="Enter target interface for scan (optional)" df-scan-iface>
+                          </div>
+                        </div> 
                       </div>
-                    </div>    
+                      <div class="form-floating mb-3">
+                        <div class="row mb-3">
+                          <div class="col-6 mb-3">
+                            <label class="form-label">Custom nmap Command</label>
+                            <p class="lead">Enter any nmap options to create your own custom command (do not enter 'nmap' in front of your options.).</p>
+                            <input type="text" class="form-control" df-scan-options>
+                          </div>
+                          <div class="col-6 mb-3">
+                            <label class="form-check-label">Vulnerability Assessment Score</label>
+                            <p class="lead">Enter the minimum CVSS score the scan should flag in the report.</p>
+                            <input type="text" class="form-control" df-scan-vulnscore>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="form-floating mb-3">
+                        <div class="row mb-3">
+                          <div class="col-6 mb-3">
+                            <h6>Host Discovery Settings</h6>
+                            <label class="form-label">SYN Scan Ports</label>
+                            <p class="lead">Enter comma separated list of ports to run SYN scan against ie '22,23,80,443,830,3389'</p>
+                            <input type="text" class="form-control" df-scan-map-syn>
+                          </div>
+                          <div class="col-6 mb-3">
+                            <label class="form-check-label">ACK Scan ports</label>
+                            <p class="lead">Enter comma separated list of ports to run ACK scan against ie '80,443'</p>
+                            <input type="text" class="form-control" placeholder="Enter SNMP community string" df-scan-map-ack>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="form-floating mb-3">
+                        <div class="row mb-3 text-align-center">
+                          <h6>SNMP Disocvery Settings</h6>
+                          <div class="col-6 mb-3">
+                            <label class="form-label">SNMP scripts</label>
+                            <input type="text" class="form-control" placeholder="Enter comma separated list of custom nmap SNMP scripts to run ie 'snmp-info,snmp-sysdescr'" df-scan-snmpscripts>
+                          </div>
+                          <div class="col-6 mb-3">
+                            <label class="form-check-label">SNMP Community</label>
+                            <input type="text" class="form-control" placeholder="Enter SNMP community string" df-scan-snmpcommunity>
+                          </div>
+                        </div>
+                      </div>
+                    </form>
                   </div>
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3">
-                      <div class="col-6 mb-3">
-                        <label class="form-label">Remote Host</label>
-                        <input type="text" class="form-control" placeholder="Enter IP of remote host for capture" df-pcap-rmhost>
+                </div>
+                  `;
+                const scan_data = {type: 'tool', name: name}
+                editor.addNode(name, 0, 0, pos_x, pos_y, name, scan_data, scan );
+                break;
+              case 'pcaps':
+                const pcap = `
+                <div>
+                  <div class="title-box"><i class="fab fa-telegram-plane"></i>Packet Capture</div>
+                  <div class="box">
+                    <form method="POST">
+                      <div class="form-floating mb-3">
+                        <div class="row mb-3">
+                          <div class="col-6 mb-3">
+                            <label class="form-label">Capture Mode</label>
+                            <select class="form-select" df-pcap-mode>
+                              <option value="pcap_lcl">Local Capture</option>
+                              <option value="pcap_tux">Remote Linux Capture</option>
+                              <option value="pcap_win">Remote Windows Capture</option>
+                            </select>
+                          </div>
+                          <div class="col-6 mb-3">
+                            <label class="form-label">Use Default Local Interface</label>
+                            <select class="form-select mb-3" df-pcap-useiface>
+                              <option value="y">yes</option>
+                              <option value="n">no</option>
+                            </select>
+                            <input type="text" class="form-control" placeholder="Enter local interface to use." df-pcap-iface>
+                          </div>
+                        </div>    
                       </div>
-                      <div class="col-6 mb-3">
-                        <label class="form-label">Remote User</label>
-                        <input type="text" class="form-control" placeholder="Enter username for remote host" df-pcap-rmuser>
+                      <div class="form-floating mb-3">
+                        <div class="row mb-3">
+                          <div class="col-6 mb-3">
+                            <label class="form-label">Remote Host</label>
+                            <input type="text" class="form-control" placeholder="Enter IP of remote host for capture" df-pcap-rmhost>
+                          </div>
+                          <div class="col-6 mb-3">
+                            <label class="form-label">Remote User</label>
+                            <input type="text" class="form-control" placeholder="Enter username for remote host" df-pcap-rmuser>
+                          </div>
+                        </div>
+                      </div> 
+                      <div class="form-floating mb-3">
+                        <div class="row mb-3">
+                          <div class="col-6">
+                            <label class="form-label">Remote Password</label>
+                            <input type="password" class="form-control" placeholder="Enter password for remote host" df-pcap-rmpass>
+                          </div>
+                          <div class="col-6">
+                            <label class="form-label">Remote Interface</label>
+                            <input type="password" class="form-control" placeholder="Enter capture interface for remote host" df-pcap-rmiface>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="form-floating mb-3">
+                        <div class="row mb-3">
+                          <div class="col-6">
+                            <label class="form-label">Capture Count (Linux & Local only)</label>
+                            <input type="number" class="form-control" placeholder="Enter the number of packets to capture" df-pcap-count>
+                          </div>
+                          <div class="col-6">
+                            <label class="form-label">Capture Duration (Windows only)</label>
+                            <input type="number" class="form-control" placeholder="Enter capture duration in seconds" df-pcap-duration>
+                          </div>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                </div>
+                  `;
+                const pcap_data = {type: 'tool', name: name}
+                editor.addNode(name, 0, 0, pos_x, pos_y, name, pcap_data, pcap );
+                break;
+              case 'test_srvr':
+                const server = `
+                  <div style="background-color: #8b7da8;>
+                    <div class="title-box">Performance Test Server</div>
+                    <div class="box" style="background-color: #8b7da8;">
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Command Options</label>
+                        <input type="text" class="form-control" df-perfs-options>
+                      </div>
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Interface Bind Settings</label>
+                        <input type="text" class="form-control" placeholder="Enter IP (interface) to bind to..." df-perfs-bind>
+                        <div class="form-text">Defaults to all interfaces (0.0.0.0) (optional)</div>
                       </div>
                     </div>
-                  </div> 
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3">
-                      <div class="col-6">
-                        <label class="form-label">Remote Password</label>
-                        <input type="password" class="form-control" placeholder="Enter password for remote host" df-pcap-rmpass>
+                  </div>
+                  `;
+                const server_data = {type: 'tool', name: name}
+                editor.addNode(name, 0, 0, pos_x, pos_y, name, server_data, server );
+                break;
+              case 'test_clnt':
+                const client = `
+                  <div style="background-color: #8b7da8;>
+                    <div class="title-box">Performance Test Client</div>
+                    <div class="box" style="background-color: #8b7da8;">
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Server Endpoint</label>
+                        <input type="text" class="form-control" placeholder="Enter IP address of server endpoint..." df-perfc-server>
+                        <div class="form-text">NOTICE: For probes set in Client mode only</div>
                       </div>
-                      <div class="col-6">
-                        <label class="form-label">Remote Interface</label>
-                        <input type="password" class="form-control" placeholder="Enter capture interface for remote host" df-pcap-rmiface>
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Command Options</label>
+                        <input type="text" class="form-control" df-perfc-options>
+                      </div>
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Interface Bind Settings</label>
+                        <input type="text" class="form-control" placeholder="Enter IP (interface) to bind to..." df-perfc-bind>
+                        <div class="form-text">Defaults to all interfaces (0.0.0.0) (optional)</div>
                       </div>
                     </div>
                   </div>
-                  <div class="form-floating mb-3">
-                    <div class="row mb-3">
-                      <div class="col-6">
-                        <label class="form-label">Capture Count (Linux & Local only)</label>
-                        <input type="number" class="form-control" placeholder="Enter the number of packets to capture" df-pcap-count>
+                  `;
+                const client_data = {type: 'tool', name: name}
+                editor.addNode(name, 0, 0, pos_x, pos_y, name, client_data, client );
+                break;
+              case 'trcrt':
+                const trcrt = `
+                  <div style="background-color: #8b7da8;>
+                    <div class="title-box">Traceroute </div>
+                    <div class="box" style="background-color: #8b7da8;">
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Traceroute Target</label>
+                        <input type="text" class="form-control" placeholder="Enter target" df-trcrt-target>
                       </div>
-                      <div class="col-6">
-                        <label class="form-label">Capture Duration (Windows only)</label>
-                        <input type="number" class="form-control" placeholder="Enter capture duration in seconds" df-pcap-duration>
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Command Options</label>
+                        <input type="text" class="form-control" placeholder="Enter cmd options if necessary" df-trcrt-options>
+                      </div>
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Preferred Packet Length</label>
+                        <input type="text" class="form-control" placeholder="Enter preferred packet length if necessary" df-trcrt-packetlen>
                       </div>
                     </div>
                   </div>
-                </form>
-              </div>
-            </div>
-              `;
-            const pcap_data = {type: 'tool', name: name}
-            editor.addNode(name, 0, 0, pos_x, pos_y, name, pcap_data, pcap );
-            break;
-          case 'test_srvr':
-            const server = `
-              <div style="background-color: #8b7da8;>
-                <div class="title-box">Performance Test Server</div>
-                <div class="box" style="background-color: #8b7da8;">
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Command Options</label>
-                    <input type="text" class="form-control" df-perfs-options>
+                  `;
+                const trcrt_data = {type: 'tool', name: name}
+                editor.addNode(name, 0, 0, pos_x, pos_y, name, trcrt_data, trcrt );
+                break;
+              case 'trcrt_dns': 
+                  const trcrtdns = `
+                  <div style="background-color: #8b7da8;">
+                    <div class="title-box">DNS Traceroute </div>
+                    <div class="box" style="background-color: #8b7da8;">
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Traceroute Target</label>
+                        <input type="text" class="form-control" placeholder="Enter target" df-trcrtdns-target>
+                      </div>
+                      <div class="form-floating mb-3">
+                        <label class="form-label">Command Options</label>
+                        <input type="text" class="form-control" placeholder="Enter cmd options if necessary" df-trcrtdns-options>
+                      </div>
+                      <div class="form-floating mb-3">
+                        <label class="form-label">DNS Server</label>
+                        <input type="text" class="form-control" placeholder="Enter DNS server for test if necessary\n(default 8.8.8.8)" df-trcrtdns-server>
+                      </div>
+                    </div>
                   </div>
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Interface Bind Settings</label>
-                    <input type="text" class="form-control" placeholder="Enter IP (interface) to bind to..." df-perfs-bind>
-                    <div class="form-text">Defaults to all interfaces (0.0.0.0) (optional)</div>
-                  </div>
-                </div>
-              </div>
-              `;
-            const server_data = {type: 'tool', name: name}
-            editor.addNode(name, 0, 0, pos_x, pos_y, name, server_data, server );
-            break;
-          case 'test_clnt':
-            const client = `
-              <div style="background-color: #8b7da8;>
-                <div class="title-box">Performance Test Client</div>
-                <div class="box" style="background-color: #8b7da8;">
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Server Endpoint</label>
-                    <input type="text" class="form-control" placeholder="Enter IP address of server endpoint..." df-perfc-server>
-                    <div class="form-text">NOTICE: For probes set in Client mode only</div>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Command Options</label>
-                    <input type="text" class="form-control" df-perfc-options>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Interface Bind Settings</label>
-                    <input type="text" class="form-control" placeholder="Enter IP (interface) to bind to..." df-perfc-bind>
-                    <div class="form-text">Defaults to all interfaces (0.0.0.0) (optional)</div>
-                  </div>
-                </div>
-              </div>
-              `;
-            const client_data = {type: 'tool', name: name}
-            editor.addNode(name, 0, 0, pos_x, pos_y, name, client_data, client );
-            break;
-          case 'trcrt':
-            const trcrt = `
-              <div style="background-color: #8b7da8;>
-                <div class="title-box">Traceroute </div>
-                <div class="box" style="background-color: #8b7da8;">
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Traceroute Target</label>
-                    <input type="text" class="form-control" placeholder="Enter target" df-trcrt-target>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Command Options</label>
-                    <input type="text" class="form-control" placeholder="Enter cmd options if necessary" df-trcrt-options>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Preferred Packet Length</label>
-                    <input type="text" class="form-control" placeholder="Enter preferred packet length if necessary" df-trcrt-packetlen>
-                  </div>
-                </div>
-              </div>
-              `;
-            const trcrt_data = {type: 'tool', name: name}
-            editor.addNode(name, 0, 0, pos_x, pos_y, name, trcrt_data, trcrt );
-            break;
-          case 'trcrt_dns': 
-              const trcrtdns = `
-              <div style="background-color: #8b7da8;">
-                <div class="title-box">DNS Traceroute </div>
-                <div class="box" style="background-color: #8b7da8;">
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Traceroute Target</label>
-                    <input type="text" class="form-control" placeholder="Enter target" df-trcrtdns-target>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <label class="form-label">Command Options</label>
-                    <input type="text" class="form-control" placeholder="Enter cmd options if necessary" df-trcrtdns-options>
-                  </div>
-                  <div class="form-floating mb-3">
-                    <label class="form-label">DNS Server</label>
-                    <input type="text" class="form-control" placeholder="Enter DNS server for test if necessary\n(default 8.8.8.8)" df-trcrtdns-server>
-                  </div>
-                </div>
-              </div>
-              `;
-            const dns_data = {type: 'tool', name: name}
-            editor.addNode(name, 0, 0, pos_x, pos_y, name, dns_data, trcrtdns );
-            break;
-        }
+                  `;
+                const dns_data = {type: 'tool', name: name}
+                editor.addNode(name, 0, 0, pos_x, pos_y, name, dns_data, trcrtdns );
+                break;
+            }
+            
+          }
+        
 
       }
       

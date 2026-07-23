@@ -276,7 +276,7 @@ async def logout(auth_id):
         resp.delete_cookie("api_access_token")
         return resp
 
-@app.route('/floweditor', defaults={'cmp_id': 'bcl','obsc': url_key, 'flow_id': 'default', 'prb_id': 'default', 'is_probe_bot': 'prb'}, methods=['GET', 'POST'])
+@app.route('/floweditor', defaults={'cmp_id': 'bcl','obsc': url_key, 'flow_id': 'default', 'prb_id': 'default', 'is_probe_bot': None}, methods=['GET', 'POST'])
 @app.route("/floweditor/<string:cmp_id>/<string:obsc>/<string:flow_id>/<string:prb_id>/<string:is_probe_bot>", methods=['GET', 'POST'])
 @user_login_required
 async def floweditor(cmp_id, obsc, flow_id, prb_id, is_probe_bot):

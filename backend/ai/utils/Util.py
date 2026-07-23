@@ -17,6 +17,7 @@ import jwt
 from datetime import datetime, timedelta, timezone
 import httpx
 from init_app import cl_data_db
+import asyncio
 
 class Util:
     def __init__(self):
@@ -86,14 +87,14 @@ class Util:
         
         return text_before, text_after
     
-    def round_down_to_5min(dt: datetime) -> datetime:
+    def round_down_to_5min(self, dt: datetime) -> datetime:
         """Round dt down (floor) to the nearest 5-minute boundary."""
         if dt is None:
             return dt
         minute = (dt.minute // 5) * 5
         return dt.replace(minute=minute, second=0, microsecond=0)
 
-    def round_up_to_5min(dt: datetime) -> datetime:
+    def round_up_to_5min(self, dt: datetime) -> datetime:
         """Round dt up (ceiling) to the next 5-minute boundary (if already on boundary, keep)."""
         if dt is None:
             return dt
@@ -109,7 +110,7 @@ class Util:
         res = base + timedelta(minutes=add_minutes)
         return res.replace(second=0, microsecond=0)
     
-    def round_down_to_30sec(dt: datetime) -> datetime:
+    def round_down_to_30sec(self, dt: datetime) -> datetime:
         """Round dt down (floor) to the nearest 30-second boundary."""
         if dt is None:
             return dt
@@ -117,7 +118,7 @@ class Util:
         sec = (dt.second // 30) * 30
         return dt.replace(second=sec, microsecond=0)
 
-    def round_up_to_30sec(dt: datetime) -> datetime:
+    def round_up_to_30sec(self, dt: datetime) -> datetime:
         """Round dt up (ceiling) to the next 30-second boundary (if already on boundary, keep)."""
         if dt is None:
             return dt
@@ -130,20 +131,37 @@ class Util:
         res = base + timedelta(seconds=add_seconds)
         return res.replace(microsecond=0)
 
-    async def make_http_request(headers: dict, url: str, data: dict, timeout: int = 10):
+    async def make_http_request(self, headers: dict, url: str, data: dict, timeout: int = 10):
         async with httpx.AsyncClient() as client:                  
             exec_resp = await client.post(url, json=data, headers=headers, timeout=timeout)
+            if exec_resp.status_code != 200:
+                self.logger.error(f"HTTP request failed with status code {exec_resp.status_code}: {exec_resp.text}")
+                return exec_resp.status_code, None
             exec_resp_data = exec_resp.json()
-            if exec_resp.status_code == 200:
-                return True, exec_resp_data
-            else:
-                return False, exec_resp_data
-            
-    async def check_id(connecting_id: int) -> bool:
+            return exec_resp.status_code, exec_resp_data
+
+    async def check_id(self, connecting_id: int) -> bool:
         allowed_telegram_ids = await cl_data_db.get_all_data(match=f"telegram_dta:*")
         for tg_id in allowed_telegram_ids:
             if tg_id.get('id') != str(connecting_id):
                 return False
             else:
                 return True
+
+    async def run_shell_cmd(self, cmd: str):
+        process = await asyncio.create_subprocess_shell(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+
+        stdout, stderr = await process.communicate()
+    
+        self.logger.error(stderr.decode())
+        
+        self.logger.info(stdout.decode())
+        
+        return_code = await process.wait()  
+        
+        self.logger.info(return_code)
+
+        return return_code, stdout.decode(), stderr.decode()
     

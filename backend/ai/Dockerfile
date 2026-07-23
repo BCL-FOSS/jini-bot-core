@@ -21,8 +21,7 @@ RUN apt-get update -y
 RUN apt-get upgrade -y
 COPY backend/ai/smartbot/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-COPY backend/ai/smartbot/ /home/quart/
-RUN mkdir /home/quart/utils
+COPY backend/ai/ /home/quart/
 RUN mkdir /home/quart/utils/chromadb_data
 RUN chmod +x boot.sh 
 

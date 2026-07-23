@@ -8,7 +8,7 @@
     <div class="col-12">
       <div class="card mb-4">
         <div class="card-header pb-0">
-          <h6>umjini SmartBot</h6>
+          <h6>umjini</h6>
         </div>
         <div class="card-body px-0 pt-0 pb-2">
           <div class="row">
@@ -40,9 +40,6 @@
                               <p class="small text-muted">URL: {{ opt.url }}/llm/mcp</p>
                             </div>
                             <div class="input-group mb-3">
-                              <a href="{{ url_for('dashboard', cmp_id=cmp_id, obsc=obsc_key, prb_id=opt.prb_id) }}" target="_blank" class="btn btn-sm btn-outline-primary ms-2">
-                                Dashboard
-                              </a>
                               <a href="{{ url_for('probe', cmp_id=cmp_id, obsc=obsc_key, prb_id=opt.prb_id) }}" target="_blank" class="btn btn-sm btn-outline-secondary ms-2">
                                 Manage
                               </a>

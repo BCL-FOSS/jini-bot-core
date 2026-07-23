@@ -4,7 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger
+from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter
 from quart_rate_limiter import rate_exempt
 import os
 from ai.utils.RedisDB import RedisDB
@@ -19,16 +19,6 @@ from quart_auth import Unauthorized
 from datetime import datetime, timedelta, timezone
 import uuid
 
-cl_sess_db = RedisDB(hostname=os.getenv('CLIENT_SESS_DB'), 
-                    port=os.getenv('CLIENT_SESS_DB_PORT'))
-cl_auth_db = RedisDB(hostname=os.getenv('CLIENT_AUTH_DB'), 
-                    port=os.getenv('CLIENT_AUTH_DB_PORT'))
-cl_data_db = RedisDB(hostname=os.getenv('CLIENT_DATA_DB'),
-                    port=os.getenv('CLIENT_DATA_DB_PORT'))
-ip_ban_db = RedisDB(hostname=os.getenv('IP_BAN_DB'), 
-                    port=os.getenv('IP_BAN_DB_PORT'))
-ws_rate_limiter = WSRateLimiter(redis_host=os.getenv('RATE_LIMIT_DB'), 
-                                redis_port=os.getenv('RATE_LIMIT_DB_PORT'))
 broker = Broker()
 bot_broker = Broker()
 util_obj=Util()
@@ -37,39 +27,7 @@ auth_ping_counter = {}
 mntr_url=os.getenv('SERVER_NAME')
 auth_attempts={}
 max_auth_attempts=int(os.getenv('MAX_AUTH_ATTEMPTS'))
-connected_probes={}
-
-# LLM System prompts
-REQUIRED_OUT_OF_SCOPE_MSG = "Please provide a question or request related to network administration or the available MCP tools."
-NET_ADMIN_INSTRUCTIONS = (
-                            "You are a Network Admin assistant with knowledge of "
-                            "network engineering, network administration, firewall configurations, and securing networks according to "
-                            "NIST, PCI DSS, GDPR, HIPAA and SOC 2 compliance standards. "
-                            "You have access to MCP servers with tools that execute common network administration functions. "
-                            "Always use the provided tools when applicable.\n"
-                            "IMPORTANT: Only answer questions that are related to the tools below or your network administration expertise. "
-                            "If a user asks something unrelated to the provided tools or prompt, DO NOT answer the question. "
-                            f"Instead, only reply with: '{REQUIRED_OUT_OF_SCOPE_MSG}.'. Do not give any other type of reply.\n"
-                            "If you are asked about your architecture, provider, or model identity, only respond with: "
-                            f"'I am a locally hosted, open source {str(os.getenv('OLLAMA_MODEL'))} model running on ollama.'\n\n"
-                        )                    
-ANALYSIS_INSTRUCTIONS = (
-    "Your primary task is to analyze the outputs of traceroutes, iperf speedtests, nmap network scans, SNMP statistics and network packet captures from tcpdump and tshark (cli version of wireshark) to identify, diagnose, troubleshoot and resolve network performance issues, outages and anomalies within current and historical network data. You will provide suggestions for network performance improvements only based on the specifications provided from the user prompt. If you are asked just to conduct an analysis always put 'SmartBot-Analysis:' before your response. If you are asked to remediate any issues found dring your analysis, use any of the applicable tools provided by the MCP servers. If the available tools are insufficient to perform remediation, reply with a detailed report of your findings, the steps you'd take to resolve any issues identified and what exact tools (command line network utilities, firewall/switch configurations etc.) and exact network command line tool commands you would use during the remediation process. Put 'SmartBot-Remediation: ' before your response. If you are asked to analyze if specific data within the network commandline utilities outputs meet certain criteria or KPI metrics specified by the user, put 'SmartBot-Alert:' before your response.\n"
-                                )
-
-def load_network_diagnostic_prompt() -> str:
-    try:
-        #base_dir = os.path.dirname(os.path.abspath(__file__))  # backend/
-        base_dir = os.getcwd()
-        prompt_path = os.path.join(base_dir, "ai", "smartbot", "skills", "network-diagnostic-system-prompt.md")
-        logger.info(f"Loading network diagnostic system prompt from: {prompt_path}")
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            return f.read()
-    except Exception as e:
-        logger.exception(f"Failed to load network diagnostic system prompt: {e}")
-        return ""
-
-NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = load_network_diagnostic_prompt()
+connected_probes={}                        
 
 logger.info(f"Network diagnostic system prompt loaded successfully.\n {NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD[:500]}...")
 
@@ -642,30 +600,6 @@ async def prbenroll():
     else:
         return jsonify(), 400
     
-@app.route('/v1/api/core/probes/exec/<string:prb_id>/<string:tool>/<string:command>', methods=['POST'])
-@rate_exempt
-async def prbexec(prb_id, tool, command):
-    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
-    jwt_token = request.cookies.get('access_token')
-    if not jwt_token:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    if await ws_rate_limiter.check_rate_limit(client_id=jwt_token) is False:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    await jwt_verification(jwt_token=jwt_token, request=request, api_key=api_key, type='prb')
-    data = await request.get_json()
-    if not data['prb_id'] or await cl_data_db.get_all_data(match=f"*{prb_id}*", cnfrm=True) is False:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    prb_data = await cl_data_db.get_all_data(match=f"*{prb_id}*")
-    prb_data_dict = next(iter(prb_data.values()))
-    headers = {'content-type': 'application/json',
-                   'x-api-key': prb_data_dict.get('prb_api_key')
-                   }
-    url = f"{prb_data_dict.get('url')}/v1/api/{tool}/{command}"
-    return jsonify(), 500 if await util_obj.make_http_request(headers=headers, url=url, data=data, timeout=int(os.getenv('REQUEST_TIMEOUT'))) is False else 200
-    
 @app.route('/v1/api/core/probes/delete', methods=['POST'])
 async def prbdelete():
     jwt_token = request.cookies.get("access_token")
@@ -681,7 +615,7 @@ async def prbdelete():
         return jsonify(), 400
     return jsonify(), 200
 
-@app.route('/v1/api/core/probes/ingest', methods=['GET', 'POST'])
+@app.route('/v1/api/core/probes/ingest', methods=['POST'])
 async def prbingest():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     jwt_token = request.cookies.get("access_token")
@@ -717,6 +651,50 @@ async def alerts():
                 return jsonify(), 200
             else:
                 return jsonify(), 400
+
+@app.route('/v1/api/core/flows', defaults={'task': None}, methods=['POST'])            
+@app.route('/v1/api/core/flows/<string:task>', methods=['POST'])
+@rate_exempt
+async def flow(task):
+    sess_id = request.args.get('sess_id')   
+    jwt_token = request.cookies.get('access_token')
+    if not jwt_token:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    if await ws_rate_limiter.check_rate_limit(client_id=jwt_token) is False:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    await jwt_verification(sess_id=sess_id, jwt_token=jwt_token, request=request)
+    data = await request.get_json()
+    if task is None or data is None:
+        await ip_blocker(conn_obj=request)
+        return jsonify(), 400
+    
+    match task:
+        case 'load':
+            if await cl_data_db.get_all_data(match=f'*{data['id']}*', cnfrm=True) is True:
+                flow_data = await cl_data_db(match=f'*{data['id']}*')
+                return jsonify(flow_data), 200
+            else:
+                return jsonify(), 400
+        case 'save':
+            cwd = os.getcwd() 
+            if data['id'] == 'default':
+                data['id'] = f"flow:{data['name']}:{str(uuid.uuid4())}" 
+            job1 = None
+            cwd = os.getcwd() 
+            now = datetime.now(tz=timezone.utc).isoformat()
+            job_comment=f"auto_job_{data['name']}_{now}"
+            task_command = ""
+            script_path = os.path.join(cwd, 'utils', 'RenoteFlowRunner.py')
+            task_command = f"python3 {script_path} "
+            job1 = await run_sync(lambda: cron.new(command=task_command, comment=job_comment))()
+            scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data['schedule']))()
+            if await run_sync(scheduled_job.is_valid())():
+                await run_sync(cron.write())()
+                await asyncio.sleep(1)
+                logger.info(f"Cron job added: {scheduled_job}")
+                result = await cl_data_db.upload_db_data(id=data['id'], data=data)
 
 @app.errorhandler(Unauthorized)
 async def unauthorized():

@@ -222,19 +222,20 @@ async def analysis():
     data = await request.get_json()
     model = data.get("model")
     instructions = data.get("instructions")
-    bot_prompt = data.get("bot_prompt")
+    message = data.get("message")
+    name = data.get('name')
 
     # --- Step C: Send conversation to Ollama ---
     conversation = [
         {"role": "system", "content": instructions},
-        {"role": "user", "content": bot_prompt},
+        {"role": "user", "content": message},
     ]
 
     ollama_out_clean = await chat_with_ollama(conversation, model)
     
     response_payload={
             "id": f"bot:analysis:{datetime.now(timezone.utc)}:{uuid.uuid4()}",
-            "user_msg": bot_prompt,
+            "user_msg": message,
             "output_text": ollama_out_clean
         }
 

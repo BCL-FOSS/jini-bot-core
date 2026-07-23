@@ -18,7 +18,7 @@
                 <div style="position: relative; height: 400px; overflow-y:auto;" id="tool-list-container">
                   <ul class="list-unstyled mb-0" id="tool-list">
                     <li class="p-2 border-bottom">
-                      <a href="{{ url_for('floweditor', cmp_id=cmp_id, obsc=obsc_key, prb_id=probe_id) }}" target="_blank" class="d-flex justify-content-between">
+                      <a href="{{ url_for('floweditor', cmp_id=cmp_id, obsc=obsc_key, prb_id=probe_id, is_probe_bot='y') }}" target="_blank" class="d-flex justify-content-between">
                         <div class="d-flex flex-row">
                           <img src="https://mdbcdn.b-cdn.net/img/Photos/new-templates/bootstrap-chat/ava1-bg.webp"
                               alt="avatar" class="d-flex align-self-center me-3" width="60">
@@ -106,14 +106,6 @@
                                   <a href="{{ url_for('floweditor', cmp_id=cmp_id, obsc=obsc_key, prb_id=flow.probe, flow_id=flow.id) }}" target="_blank" class="btn btn-sm btn-outline-primary ms-2">
                                     Edit
                                   </a>
-                                  <button type="button" class="btn btn-sm btn-outline-secondary ms-2 flow-schedule-btn"
-                                      data-id="{{ flow.id|e }}"
-                                      data-name="{{ flow.name }}"
-                                      data-probe="{{ flow.probe|e }}"
-                                      data-flow="{{ flow.flow|tojson|e }}"
-                                      data-comment="{{ flow.comment|e }}">
-                                    Schedule
-                                  </button>
                                   <button class="btn btn-sm btn-outline-danger ms-2 flow-delete-btn"
                                       data-id="{{ flow.id|e }}"
                                       data-name="{{ flow.name }}"

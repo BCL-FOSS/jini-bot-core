@@ -13,8 +13,9 @@ class FlowRunner:
         self.logger = logger
         self.util_obj = Util()
         self.email_handler = EmailSenderHandler()
+        self.cwd = os.getcwd()
 
-    async def run(self, flow_str: str, api_key: str, url: str, user_id: str, pid: str = None):
+    async def run(self, flow_str: str):
         flow_dict = ast.literal_eval(flow_str)
 
         # Parsed flow data
@@ -32,7 +33,7 @@ class FlowRunner:
             match node_data['name']:
                 case str() as s if s.startswith('prb:'):
                     if node_data['prb-trcrttype']:
-                        remote_tool_params['target'] = node_data['prb-trcrttarget']
+                        remote_tool_params['tool_prms']['target'] = node_data['prb-trcrttarget']
 
                         if node_data['prb-trcrtoptions']:
                             remote_tool_params['tool_prms']['options'] = node_data['prb-trcrtoptions']
@@ -43,7 +44,7 @@ class FlowRunner:
 
                         remote_tools_to_execute[node_id]['name'] = node_data['prb-trcrttype']
                         remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
-                        remote_tools_to_execute[node_id]['prb'] = node_data['name']
+                        remote_tools_to_execute[node_id]['prb_id'] = node_data['id']
                         remote_tools_to_execute[node_id]['url'] = node_data['url']
                         remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
 
@@ -51,11 +52,11 @@ class FlowRunner:
                         if node_data['prb-perfoptions']:
                             remote_tool_params['tool_prms']['options'] = node_data['prb-perfoptions']
                         if node_data['prb-perfserver'] and node_data['prb-perftype'] == 'spdtst_clnt':
-                            remote_tool_params['tool_prms']['server'] = node_data['prb-perfserver']
+                            remote-_tool_params['tool_prms']['server'] = node_data['prb-perfserver']
 
                         remote_tools_to_execute[node_id]['name'] = node_data['prb-perftype']
                         remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
-                        remote_tools_to_execute[node_id]['prb'] = node_data['name']
+                        remote_tools_to_execute[node_id]['prb_id'] = node_data['id']
                         remote_tools_to_execute[node_id]['url'] = node_data['url']
                         remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
 
@@ -74,7 +75,7 @@ class FlowRunner:
                             remote_tool_params['tool_prms']['options'] = node_data['prb-scanoptions']
 
                         if node_data['prb-scantgtifacedef'] == 'y' and node_data['scantgtiface']:
-                            remote_tool_params['interface'] = node_data['prb-scantgtiface']
+                            remote_tool_params['tool_prms']['interface'] = node_data['prb-scantgtiface']
 
                         if node_data['prb-scanvulnscore'] and node_data['prb-scanstype'] == 'vuln_scan':
                             remote_tool_params['tool_prms']['min_score'] = node_data['prb-scanvulnscore']
@@ -87,7 +88,7 @@ class FlowRunner:
 
                         remote_tools_to_execute[node_id]['name'] = node_data['prb-scanstype']
                         remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
-                        remote_tools_to_execute[node_id]['prb'] = node_data['name']
+                        remote_tools_to_execute[node_id]['prb_id'] = node_data['id']
                         remote_tools_to_execute[node_id]['url'] = node_data['url']
                         remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
 
@@ -100,12 +101,18 @@ class FlowRunner:
                         if node_data['prb-pcapmode'] == 'pcap_lcl' and node_data['prb-pcapcount']:
                             remote_tool_params['tool_prms']['cap_count'] = node_data['prb-pcapcount']
 
+                            if node_data['prb-pcaplcliface']:
+                                remote_tool_params['tool_prms']['interface'] = node_data['prb-pcaplcliface']
+
                         if node_data['prb-pcapduration'] and node_data['prb-pcapmode'] == 'pcap_win':
                             remote_tool_params['tool_prms']['duration'] = node_data['prb-pcapduration']
 
+                        if node_data['prb-pcaprmiface'] and node_data['prb-pcapmode'] == 'pcap_win' | 'pcap_tux':
+                            remote_tool_params['tool_prms']['remote_iface'] = node_data['prb-pcaprmiface']
+
                         remote_tools_to_execute[node_id]['name'] = node_data['prb-pcapmode']
                         remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
-                        remote_tools_to_execute[node_id]['prb'] = node_data['name']
+                        remote_tools_to_execute[node_id]['prb_id'] = node_data['id']
                         remote_tools_to_execute[node_id]['url'] = node_data['url']
                         remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
 
@@ -134,19 +141,28 @@ class FlowRunner:
                             'data': {
                                     'action': remote_tools_to_execute[node_id]['name'],
                                     'params': remote_tools_to_execute[node_id]['arguments'],
-                                    'prb_id': pid,
+                                    'prb_id': remote_tools_to_execute[node_id]['prb_id'],
                                 }
                             }
                 
                 task_resp, task_resp_json = await self.util_obj.make_http_request(**task_data)
                 if task_resp.status_code == 200:
-                    cwd = os.getcwd() 
-                    script_path = os.path.join(cwd, 'cli-parser', f'Parsers.py')
-                    task_command = f"python3 {script_path} --action {remote_tools_to_execute[node_id]['name']} --file {task_resp_json['output']} --prbid {pid} --params '{remote_tools_to_execute[node_id]['arguments']}'"
+                     
+                    parser_script_path = os.path.join(self.cwd, 'jini-utils', f'Parsers.py')
+                    task_command = f"python3 {parser_script_path} --action {remote_tools_to_execute[node_id]['name']} -o {task_resp_json['output']}"
+
+                    if str(remote_tools_to_execute[node_id]['name']).startswith('scan_'):
+                        task_command+=f'--file {task_resp_json['output']}'
+
+                    if str(remote_tools_to_execute[node_id]['name']).startswith('trcrt'):
+                        task_command+=f'-tar {remote_tools_to_execute[node_id]['arguments']['tool_prms']['target']} -pid {remote_tools_to_execute[node_id]['prb_id']}'
+
+                    if str(remote_tools_to_execute[node_id]['name']).startswith('pcap_'):
+                        task_command+=f'-i {remote_tools_to_execute[node_id]['arguments']['tool_prms']['interface']}'
 
                     task_return_code, task_stdout, task_stderr = await self.util_obj.run_shell_cmd(task_command)
                     if task_return_code == 0:
-                        task_output+=f"Task {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb']}\nOutput: {task_resp_json['output']}\n"
+                        task_output+=f"Task {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nOutput: {task_stdout}\n"
 
             analysis_prompt = (
                                         f"{task_output}"
@@ -173,6 +189,7 @@ class FlowRunner:
             chat_resp, chat_resp_json = await self.util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
 
             if chat_resp.status == 200:
+
                 await self.email_handler.send_transactional_email()
                 
 

@@ -11,6 +11,7 @@ import os
 from crontab import CronTab
 from ai.utils.RedisDB import RedisDB
 from utils.WSRateLimiter import WSRateLimiter
+import asyncio
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('passlib').setLevel(logging.ERROR)
@@ -55,12 +56,24 @@ NET_ADMIN_INSTRUCTIONS = (
                         )                    
 ANALYSIS_INSTRUCTIONS = (
     "Your primary task is to analyze the outputs of traceroutes, iperf speedtests, nmap network scans, SNMP statistics and network packet captures from tcpdump and tshark (cli version of wireshark) to identify, diagnose, troubleshoot and resolve network performance issues, outages and anomalies within current and historical network data. You will provide suggestions for network performance improvements only based on the specifications provided from the user prompt. If you are asked just to conduct an analysis always put 'SmartBot-Analysis:' before your response. If you are asked to remediate any issues found dring your analysis, use any of the applicable tools provided by the MCP servers. If the available tools are insufficient to perform remediation, reply with a detailed report of your findings, the steps you'd take to resolve any issues identified and what exact tools (command line network utilities, firewall/switch configurations etc.) and exact network command line tool commands you would use during the remediation process. Put 'SmartBot-Remediation: ' before your response. If you are asked to analyze if specific data within the network commandline utilities outputs meet certain criteria or KPI metrics specified by the user, put 'SmartBot-Alert:' before your response.\n")
+cwd = os.getcwd()
+utility_scripts_path = os.path.join(cwd, 'ai', 'utils', 'jini-utils')
+
+def check_for_utils():
+    # Check if jini utility scripts have been downloaded. If not, clones from github.
+    if os.path.isdir(utility_scripts_path) is False:
+        code, output, error = asyncio.run(util_obj.run_shell_cmd(cmd=f'cd {os.path.join(cwd, 'ai', 'utils')} && git clone https://github.com/BCL-FOSS/jini-utils.git'))
+        if code != 0:
+            logger.info(f'Error: {error}\nOutput: {output}')
+            exit(code=code)
+        logger.info(output)
+    else:
+        pass
 
 def load_network_diagnostic_prompt() -> str:
     try:
         #base_dir = os.path.dirname(os.path.abspath(__file__))  # backend/
-        base_dir = os.getcwd()
-        prompt_path = os.path.join(base_dir, "ai", "skills", "network-diagnostic-system-prompt.md")
+        prompt_path = os.path.join(cwd, "ai", "skills", "network-diagnostic-system-prompt.md")
         logger.info(f"Loading network diagnostic system prompt from: {prompt_path}")
         with open(prompt_path, "r", encoding="utf-8") as f:
             return f.read()

@@ -4,7 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter
+from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils
 from quart_rate_limiter import rate_exempt
 import os
 from ai.utils.RedisDB import RedisDB
@@ -27,8 +27,8 @@ auth_ping_counter = {}
 mntr_url=os.getenv('SERVER_NAME')
 auth_attempts={}
 max_auth_attempts=int(os.getenv('MAX_AUTH_ATTEMPTS'))
-connected_probes={}                        
-
+connected_probes={}    
+check_for_utils()                    
 logger.info(f"Network diagnostic system prompt loaded successfully.\n {NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD[:500]}...")
 
 async def ip_blocker(conn_obj: Request | Websocket, auto_ban: bool = False, check_if_allowed: bool = False):

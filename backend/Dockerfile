@@ -1,5 +1,11 @@
 FROM python:3.12
 
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && apt-get install -y \
+      git \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN adduser quart --disabled-password 
 
 WORKDIR /home/quart
@@ -13,10 +19,6 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ /home/quart/
-
-WORKDIR /home/quart/utils
-
-RUN git clone https://github.com/BCL-FOSS/cli-parser.git
 
 RUN chmod +x boot.sh 
 

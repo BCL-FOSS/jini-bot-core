@@ -58,7 +58,7 @@
               </button>
               <ul class="dropdown-menu" aria-labelledby="probeDropdown">
                 {% for probe in all_probes.values() %}
-                  <li><div class="dropdown-item drag-drawflow" draggable="true" ondragstart="drag(event)" id="{{ probe.prb_id }}" data-url="{{ probe.url }}" data-node="{{ probe.prb_id }}" data-api="{{ probe.prb_api_key }}"><i class="fas fa-mouse"></i>Site: {{ probe.site }} | Name: {{ probe.name }}</div></li>
+                  <li><div class="dropdown-item drag-drawflow" draggable="true" ondragstart="drag(event)" id="{{ probe.prb_id }}" data-url="{{ probe.url }}" data-node="{{ probe.prb_id }}" data-id="{{ probe.prb_id }}" data-api="{{ probe.prb_api_key }}"><i class="fas fa-mouse"></i>Site: {{ probe.site }} | Name: {{ probe.name }}</div></li>
                 {% endfor %}
               </ul>
             </div>
@@ -396,13 +396,15 @@
         const flow = JSON.stringify(data, null,4);
         let newFlowResp = null;
 
-        const payload = {
+        let payload = {
           "flow": flow,
           "id": flowID,
           "name": savename,
           "user_id": "{{ cur_usr_id }}",
           "type": isProbeBot,
         };
+
+        payload = setFlowSchedule(payload);
 
         if (isProbeBot === 'y') {
           const prbID = "{{ prb_id }}";
@@ -507,7 +509,8 @@
           } else {
             const selectedProbeTools = document.getElementById(name);
             const probeUrl = selectedProbeTools.dataset.url;
-            const probeApi =selectedProbeTools.dataset.api;
+            const probeApi = selectedProbeTools.dataset.api;
+            const probeId = selectedProbeTools.dataset.id;
 
             const probe = `
               <div class="title-box">Remote Probe</div>
@@ -588,7 +591,7 @@
                           </div>
                           <div class="col-6 mb-3">
                             <label class="form-label">Target Interface</label>
-                            <select class="form-select mb-3" df-prb-scantgtifacedef>
+                            <select class="form-select mb-3" df-prb-scandeftgtiface>
                               <option value="y">yes</option>
                               <option value="n">no</option>
                             </select>
@@ -650,11 +653,11 @@
                           </div>
                           <div class="col-6 mb-3">
                             <label class="form-label">Use Default Local Interface</label>
-                            <select class="form-select mb-3" df-prb-pcaplcliface>
+                            <select class="form-select mb-3" df-prb-pcapdefiface>
                               <option value="y">yes</option>
                               <option value="n">no</option>
                             </select>
-                            <input type="text" class="form-control" placeholder="Local interface to use." df-prb-pcaplclifacechoice>
+                            <input type="text" class="form-control" placeholder="Local interface to use." df-prb-pcaplcliface>
                           </div>
                         </div>
                         <div class="row mb-3">
@@ -696,7 +699,7 @@
                   </div>              
               </div>
               `;
-            const probe_data = { type: 'probe', name: name, url: probeUrl, api_key: probeApi };
+            const probe_data = { type: 'probe', name: name, url: probeUrl, api_key: probeApi, id: probeId };
             editor.addNode(name, 0, 0, pos_x, pos_y, name, probe_data, probe);
           }
         }

@@ -22,6 +22,10 @@ import asyncio
 class Util:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        self.company_global_namespace = 'cmp:'
+        self.company_data_global_namespace = 'dta:'
+        self.user_global_namespace = 'usr:'
+        self.user_id_global_namespace = 'uid:'
 
     def gen_id(self) -> str:
         return str(uuid.uuid4())

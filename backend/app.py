@@ -4,36 +4,30 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt
+from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path
 from quart_rate_limiter import rate_exempt
 import os
-from ai.utils.RedisDB import RedisDB
 from quart import (websocket, abort, jsonify)
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
-from utils.WSRateLimiter import WSRateLimiter
-from ai.utils.Util import Util
 from quart import request, jsonify, request, Response
 import bcrypt
 from quart_auth import Unauthorized
 from datetime import datetime, timedelta, timezone
 import uuid
+import secrets
 
 broker = Broker()
 bot_broker = Broker()
-util_obj=Util()
-api_name = os.getenv('API_NAME')
 auth_ping_counter = {}
-mntr_url=os.getenv('SERVER_NAME')
 auth_attempts={}
-max_auth_attempts=int(os.getenv('MAX_AUTH_ATTEMPTS'))
 connected_probes={}   
 NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = None 
 
 async def ip_blocker(conn_obj: Request | Websocket, auto_ban: bool = False, check_if_allowed: bool = False):
     global auth_attempts
     if check_if_allowed is True:
-        if await ip_ban_db.get_all_data(match=f"allowed_ip:{conn_obj.access_route[-1]}", cnfrm=True) is False:
+        if await ip_ban_db.get_all_data(match=f"*blocked_ip:{conn_obj.access_route[-1]}*", cnfrm=True) is True:
             logger.warning(f"IP {conn_obj.access_route[-1]} is not in allowed list, blocking access.")
             return False
     if auto_ban is True:
@@ -51,7 +45,6 @@ async def ip_blocker(conn_obj: Request | Websocket, auto_ban: bool = False, chec
 
     if auth_attempts[conn_obj.access_route[-1]] != max_auth_attempts:
         auth_attempts[conn_obj.access_route[-1]] += 1
-        
     else:
         await ip_ban_db.connect_db()
         now = datetime.now(tz=timezone.utc)
@@ -393,23 +386,24 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
             logger.exception(f"Error in session_watchdog for {sess_id}: {e}")
 
 @app.before_serving
-async def db_startup():
+async def startup():
     await ip_ban_db.connect_db()
     await cl_auth_db.connect_db()
     await cl_sess_db.connect_db()
     await cl_data_db.connect_db()
     await check_for_utils()
+    global NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
     NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = await run_sync(load_network_diagnostic_prompt())
     logger.info(f"Network diagnostic system prompt loaded successfully.\n {NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD[:500]}...")
     
 @app.before_request
 async def check_ip():
-    if await ip_ban_db.get_all_data(match=f"blocked_ip:{request.access_route[-1]}", cnfrm=True) is True:
+    if await ip_blocker(conn_obj=request, check_if_allowed=True) is False:
         abort(401)
 
 @app.before_websocket
 async def check_ip_ws():
-    if await ip_ban_db.get_all_data(match=f"blocked_ip:{websocket.access_route[-1]}", cnfrm=True) is True:
+    if await ip_blocker(conn_obj=request, check_if_allowed=True) is False:
         try:
             await websocket.close()
         except RuntimeError:
@@ -675,8 +669,9 @@ async def flow(task):
     match task:
         case 'load':
             if await cl_data_db.get_all_data(match=f'*{data['id']}*', cnfrm=True) is True:
-                flow_data = await cl_data_db(match=f'*{data['id']}*')
-                return jsonify(flow_data), 200
+                flow_data = await cl_data_db.get_all_data(match=f'*{data['id']}*')
+                flow_data_dict = next(iter(flow_data.values()))
+                return jsonify(flow_data_dict), 200
             else:
                 return jsonify(), 400
         case 'save': 
@@ -687,15 +682,70 @@ async def flow(task):
             job_comment=f"auto_job_{data['name']}_{now}"
             task_command = ""
             script_path = os.path.join(cwd, 'utils', 'RenoteFlowRunner.py')
-            task_command = f"python3 {script_path} "
+            task_command = f"python3 {script_path} -f {data['flow']} -n {data['name']}"
             job1 = await run_sync(lambda: cron.new(command=task_command, comment=job_comment))()
             scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data['schedule']))()
             if await run_sync(scheduled_job.is_valid())():
                 await run_sync(cron.write())()
                 await asyncio.sleep(1)
                 logger.info(f"Cron job added: {scheduled_job}")
-                result = await cl_data_db.upload_db_data(id=data['id'], data=data)
+                if await cl_data_db.upload_db_data(id=data['id'], data=data) > 0:
+                    return jsonify(), 200
+            else:
+                return jsonify(), 400
+       
+@app.route('/v1/api/core/reset', methods=['GET'])
+@rate_exempt
+async def reset():
+    sess_id = request.args.get('sess_id')   
+    jwt_token = request.cookies.get('access_token')
+    if not jwt_token:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    if await ws_rate_limiter.check_rate_limit(client_id=jwt_token) is False:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    await jwt_verification(sess_id=sess_id, jwt_token=jwt_token, request=request)
 
+    prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
+    prim_contact_dict = next(iter(prim_contact.values()))
+    email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
+    old_api_data = await cl_data_db.get_all_data(match=f"{api_name}:dta:*")
+    old_api_data_dict = next(iter(old_api_data.values())) if old_api_data else None
+    if await cl_data_db.del_obj(key=f"{api_name}:dta:{old_api_data_dict.get(f'{api_name}_id')}") is not None:
+        api_id = util_obj.key_gen(size=10) 
+        new_api_key = str(uuid.uuid4())
+        updated_api_data = {
+            api_name: bcrypt.hashpw(new_api_key, bcrypt.gensalt()),
+            f"{api_name}_id": api_id,
+            f"{api_name}_rand": secrets.token_urlsafe(500),
+            f"{api_name}_jwt_secret": secrets.token_urlsafe(500)
+        }
+   
+        if await cl_data_db.upload_db_data(id=f"{api_name}:dta:{api_id}", data=updated_api_data) > 0:
+            link = cli.create_link(secret=new_api_key, ttl=int(os.environ.get('OTS_TTL')))
+
+            html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
+                        <p>Hello,</p>
+                        <p><strong>umjiniti</strong> API key for 'JiniBot <strong>{os.getenv('JINIBOT_NAME')}</strong> has been reset.</p>
+                        <p>You can retrieve the API key using the following one-time secret link. Note that this link will expire after a single use.</p>
+                        <p>API Key Retrieval Link: <a href="{link}">{link}</a></p>
+                        <p>Thank you,<br/>umjiniti Team</p>
+
+                        </div>"""
+            email_params = {'sender': {'name': 'umjiniti Admin', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+                            'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('email')}],
+                            'subject': f"New Jini API Key Generated for {prim_contact_dict.get('email')}",
+                            'hmtl_content': html_snippet }
+            
+            email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
+            email_code, email_output, email_error = -await util_obj.run_shell_cmd(cmd=email_command)
+            return jsonify(), 200
+        else:
+            return jsonify(), 400
+    else:
+        return jsonify(), 400
+    
 @app.errorhandler(Unauthorized)
 async def unauthorized():
     await ip_blocker(conn_obj=request)

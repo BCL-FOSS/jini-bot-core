@@ -1,5 +1,4 @@
 from quart import Quart
-from quart.utils import run_sync
 import nest_asyncio
 import logging
 import secrets
@@ -12,12 +11,11 @@ import os
 from crontab import CronTab
 from ai.utils.RedisDB import RedisDB
 from utils.WSRateLimiter import WSRateLimiter
-import asyncio
+from onetimesecret import OneTimeSecretCli
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('passlib').setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
-
 app = Quart(__name__)
 app.config.from_object("config")
 app.config['SECRET_KEY'] = secrets.token_urlsafe()
@@ -30,6 +28,10 @@ RateLimiter(
         RateLimit(20, timedelta(minutes=1)),
     ],
 )
+cli = OneTimeSecretCli(os.environ.get('OTS_USER'), os.environ.get('OTS_KEY'), os.environ.get('REGION'))
+api_name = os.getenv('API_NAME')
+mntr_url=os.getenv('SERVER_NAME')
+max_auth_attempts=int(os.getenv('MAX_AUTH_ATTEMPTS'))
 util_obj = Util()
 cron = CronTab(user='root')
 cl_sess_db = RedisDB(hostname=os.getenv('CLIENT_SESS_DB'), 
@@ -63,11 +65,8 @@ utility_scripts_path = os.path.join(cwd, 'ai', 'utils', 'jini-utils')
 async def check_for_utils():
     # Check if jini utility scripts have been downloaded. If not, clones from github.
     if os.path.isdir(utility_scripts_path) is False:
-        code, output, error = await util_obj.run_shell_cmd(cmd=f'cd {os.path.join(cwd, 'ai', 'utils')} && git clone https://github.com/BCL-FOSS/jini-utils.git')
-        if code != 0:
-            logger.info(f'Error: {error}\nOutput: {output}')  
-        logger.info(output)
-        exit(code=code)
+        code, output, error = await util_obj.run_shell_cmd(cmd=f'cd {os.path.join(cwd, 'ai' 'utils')} && git clone https://github.com/BCL-FOSS/jini-utils.git')
+        logger.info(f'code: {code}\noutput: {output}\nerror: {error}')
     else:
         pass
 

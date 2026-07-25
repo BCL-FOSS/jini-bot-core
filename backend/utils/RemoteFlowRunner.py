@@ -1,26 +1,20 @@
 import ast
 import argparse
 import asyncio
-from email import message
-from backend.init_app import logger, ANALYSIS_INSTRUCTIONS, NET_ADMIN_INSTRUCTIONS, REQUIRED_OUT_OF_SCOPE_MSG, cl_auth_db, cl_data_db, cwd
-from backend.app import NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
+from backend.init_app import logger, ANALYSIS_INSTRUCTIONS, NET_ADMIN_INSTRUCTIONS, utility_scripts_path
+from backend.app import NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD, cl_data_db
 from backend.ai.utils.Util import Util
 import os
-from uuid import uuid4
-from backend.utils.EmailSenderHandler import EmailSenderHandler
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import uuid
 
-class FlowRunner:
+class RemoteFlowRunner:
     def __init__(self):
         self.logger = logger
         self.util_obj = Util()
-        self.email_handler = EmailSenderHandler()
-        self.cwd = cwd
-
+   
     async def run(self, flow_str: str, flow_name: str):
         flow_dict = ast.literal_eval(flow_str)
-
         # Parsed flow data
         workflow = flow_dict
         self.logger.info(workflow)
@@ -55,7 +49,7 @@ class FlowRunner:
                         if node_data['prb-perfoptions']:
                             remote_tool_params['tool_prms']['options'] = node_data['prb-perfoptions']
                         if node_data['prb-perfserver'] and node_data['prb-perftype'] == 'spdtst_clnt':
-                            remote-_tool_params['tool_prms']['server'] = node_data['prb-perfserver']
+                            remote_tool_params['tool_prms']['server'] = node_data['prb-perfserver']
 
                         remote_tools_to_execute[node_id]['name'] = node_data['prb-perftype']
                         remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
@@ -151,7 +145,7 @@ class FlowRunner:
                 task_resp, task_resp_json = await self.util_obj.make_http_request(**task_data)
                 if task_resp == 200:
                      
-                    parser_script_path = os.path.join(self.cwd, 'utils', 'jini-utils', f'Parsers.py')
+                    parser_script_path = os.path.join(utility_scripts_path, f'Parsers.py')
                     task_command = f"python3 {parser_script_path} --action {remote_tools_to_execute[node_id]['name']} -o {task_resp_json['output']}"
 
                     if str(remote_tools_to_execute[node_id]['name']).startswith('scan_'):
@@ -193,12 +187,9 @@ class FlowRunner:
             chat_resp, chat_resp_json = await self.util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
 
             if chat_resp.status == 200:
-                email_contact = None
                 now = str(datetime.now(tz=timezone.utc))
-                if await cl_auth_db.get_all_data(match='*primary-contact-email*', cnfrm=True) is False:
-                    await cl_data_db.upload_db_data(id=f'anlys:{agents[0]['name']}:{now}:{str(uuid.uuid4())}')
-                else:
-                    email_contact = await cl_data_db.get_all_data(match='*primary-contact-email*')
+                email_contact = await cl_data_db.get_all_data(match='*pct:*')
+                email_contact_data = next(iter(email_contact.values()))
 
                 html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
                                 <p>Jini Monitor Analysis Complete</p>
@@ -208,14 +199,25 @@ class FlowRunner:
                                 <p>Tool(s) Output: {task_output}</p>
                                 </div>"""
                 email_params = {'sender': {'name': 'jini bot', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                                'to': [{"name": email_contact, "email": email_contact}],
+                                'to': [{"name": f'{email_contact_data.get('fname')} {email_contact_data.get('lname')}', "email": email_contact_data.get('eml')}],
                                 'subject': f'jini Bot Analysis Report - {flow_name} - {now}',
                                 'html_content': html_snippet}
-                email_script_path = os.path.join(self.cwd, 'utils', 'jini-utils', f'EmailMgr.py')
+                email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
                 email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
 
                 email_code, email_output, email_error = -await self.util_obj.run_shell_cmd(cmd=email_command)
-                
+
+                if email_code != 0:
+                    logger.info(f'{flow_name} analysis not sent via email')
+
+                logger.info(email_output)
+                anlys_id = f'anlys:{flow_name}:{now}:{str(uuid.uuid4())}'
+                anlys_data = {'id': anlys_id,
+                              'data': html_snippet}
+
+                if await cl_data_db.upload_db_data(id=anlys_id, data=anlys_data) > 0:
+                    logger.info(f'{flow_name} analysis complete')
+                    return
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run network automation workflows.")
@@ -224,34 +226,11 @@ if __name__ == "__main__":
         type=str, 
         help="Network flow to execute"
     )
-   
     parser.add_argument(
-        '-w', '--ws_url', 
+        '-n', '--name', 
         type=str, 
-        help="WebSocket URL for reporting results"
-    )
-    parser.add_argument(
-        '-pid', '--probe_id', 
-        type=str, 
-        help="Probe ID for reporting results"
-    )
-    parser.add_argument(
-        '-ak', '--api_key', 
-        type=str, 
-        help="API key for authentication"
-    )
-    parser.add_argument(
-        '-url', '--probe_url',
-        type=str,
-        help="Probe API url"
-    )
-    parser.add_argument(
-        '-uid', '--user_id',
-        type=str,
-        help="User ID assigned to the current flow"
+        help="Network flow name"
     )
     args = parser.parse_args()
-
-    workflow_runner = FlowRunner()
-
-    asyncio.run(workflow_runner.run(flow_str=str(args.flow), ws_url=args.ws_url, probe_id=args.probe_id, api_key=args.api_key, url=args.probe_url, user_id=args.user_id))
+    workflow_runner = RemoteFlowRunner()
+    asyncio.run(workflow_runner.run(flow_str=str(args.flow), flow_name=args.name))

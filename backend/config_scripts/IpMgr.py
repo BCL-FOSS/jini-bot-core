@@ -2,7 +2,7 @@ from datetime import datetime
 import asyncio
 import argparse
 from datetime import datetime, timezone
-from app import ip_ban_db, logger
+from backend.app import ip_ban_db, logger
 
 async def edit_db(action: str, ip_address: str):
     await ip_ban_db.connect_db()
@@ -31,8 +31,7 @@ if __name__ == "__main__":
     parser.add_argument(
         '-i', '--ip', 
         type=str, 
-        help="IP address to act upon"
+        help="IP address to filter/unfilter"
     )
     args = parser.parse_args()
-
     asyncio.run(edit_db(args.action, args.ip))

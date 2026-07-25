@@ -4,7 +4,8 @@ import os
 import uuid
 from passlib.hash import bcrypt
 import secrets
-from app import logger, util_obj, cl_data_db, api_name
+from app import api_name
+from backend.init_app import logger, util_obj, cl_data_db, api_name, cwd
 import argparse
 import asyncio
 
@@ -84,15 +85,23 @@ async def createapi(fname: str, lname: str, email: str):
                             <p>Thank you,<br/>umjiniti Team</p>
 
                             </div>"""
-            send_result = email_sender_handler.send_transactional_email(
-                sender={'name': 'umjiniti Admin', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                to=[{"name": email, "email": email}],
-                subject=f"New umjiniti-core API Key Generated for {email}",
-                html_content=html_snippet
-            )
+            #send_result = email_sender_handler.send_transactional_email(
+            #    sender={'name': 'umjiniti Admin', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+            #    to=[{"name": email, "email": email}],
+            #    subject=f"New umjiniti-core API Key Generated for {email}",
+            #    html_content=html_snippet
+            #)
 
-            logger.info(type(send_result))
-            logger.info(f"API key creation email send result: {send_result}")       
+            email_params = {'sender': {'name': 'umjiniti Admin', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+                            'to': [{"name": email, "email": email}],
+                            'subject': f"New umjiniti-core API Key Generated for {email}",
+                            'hmtl_content': html_snippet }
+
+            email_script_path = os.path.join(cwd, 'utils', 'jini-utils', f'EmailMgr.py')
+            email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
+            email_code, email_output, email_error = -await util_obj.run_shell_cmd(cmd=email_command)
+            #logger.info(type(send_result))
+            logger.info(f"API key creation email send result: {email_output}")       
             return
         else:
             logger.info('API creation failed')

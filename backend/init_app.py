@@ -1,4 +1,5 @@
 from quart import Quart
+from quart.utils import run_sync
 import nest_asyncio
 import logging
 import secrets
@@ -59,14 +60,14 @@ ANALYSIS_INSTRUCTIONS = (
 cwd = os.getcwd()
 utility_scripts_path = os.path.join(cwd, 'ai', 'utils', 'jini-utils')
 
-def check_for_utils():
+async def check_for_utils():
     # Check if jini utility scripts have been downloaded. If not, clones from github.
     if os.path.isdir(utility_scripts_path) is False:
-        code, output, error = asyncio.run(util_obj.run_shell_cmd(cmd=f'cd {os.path.join(cwd, 'ai', 'utils')} && git clone https://github.com/BCL-FOSS/jini-utils.git'))
+        code, output, error = await util_obj.run_shell_cmd(cmd=f'cd {os.path.join(cwd, 'ai', 'utils')} && git clone https://github.com/BCL-FOSS/jini-utils.git')
         if code != 0:
-            logger.info(f'Error: {error}\nOutput: {output}')
-            exit(code=code)
+            logger.info(f'Error: {error}\nOutput: {output}')  
         logger.info(output)
+        exit(code=code)
     else:
         pass
 
@@ -80,8 +81,6 @@ def load_network_diagnostic_prompt() -> str:
     except Exception as e:
         logger.exception(f"Failed to load network diagnostic system prompt: {e}")
         return ""
-
-NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = load_network_diagnostic_prompt()
 
 def schedule_cronjob(job1: CronTab, core_act_data: dict):
     if 'minutes' in core_act_data and core_act_data['minutes']:

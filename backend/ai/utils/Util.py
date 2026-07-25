@@ -23,6 +23,15 @@ class Util:
     def __init__(self):
         self.logger = logging.getLogger(__name__)
 
+    def gen_id(self) -> str:
+        return str(uuid.uuid4())
+    
+    def gen_user(self, username=""):
+        user_namespace = f'{self.user_global_namespace}{self.gen_id()}'
+        user_id = f'{self.user_id_global_namespace}{username}{self.gen_id()}'
+    
+        return user_namespace, user_id
+
     def generate_ephemeral_token(self, id: str, rand: str,  secret_key: str, expire: int = 3, type: str = None) -> str:
 
         local_tz = get_localzone()  

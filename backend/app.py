@@ -4,7 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils
+from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt
 from quart_rate_limiter import rate_exempt
 import os
 from ai.utils.RedisDB import RedisDB
@@ -14,7 +14,7 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 from utils.WSRateLimiter import WSRateLimiter
 from ai.utils.Util import Util
 from quart import request, jsonify, request, Response
-from passlib.hash import bcrypt
+import bcrypt
 from quart_auth import Unauthorized
 from datetime import datetime, timedelta, timezone
 import uuid
@@ -27,9 +27,8 @@ auth_ping_counter = {}
 mntr_url=os.getenv('SERVER_NAME')
 auth_attempts={}
 max_auth_attempts=int(os.getenv('MAX_AUTH_ATTEMPTS'))
-connected_probes={}    
-check_for_utils()                    
-logger.info(f"Network diagnostic system prompt loaded successfully.\n {NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD[:500]}...")
+connected_probes={}   
+NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = None 
 
 async def ip_blocker(conn_obj: Request | Websocket, auto_ban: bool = False, check_if_allowed: bool = False):
     global auth_attempts
@@ -74,11 +73,11 @@ async def jwt_verification(request: Request | Websocket, type: str = 'usr', api_
                 if jwt_token:
                     jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
                     decoded_token = jwt.decode(jwt=jwt_token, key=jwt_key , algorithms=["HS256"])
-                    if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand') or bcrypt.verify(api_key,api_data_dict.get(api_name)) is False:
+                    if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand') or bcrypt.checkpw(api_key,api_data_dict.get(api_name)) is False:
                         await ip_blocker(conn_obj=request)
                         abort(401)
                 else:
-                    if bcrypt.verify(api_key, api_data_dict.get(api_name)) is False:
+                    if bcrypt.checkpw(api_key, api_data_dict.get(api_name)) is False:
                         await ip_blocker(conn_obj=request)
                         abort(401)
                 return api_data_dict
@@ -399,7 +398,10 @@ async def db_startup():
     await cl_auth_db.connect_db()
     await cl_sess_db.connect_db()
     await cl_data_db.connect_db()
-
+    await check_for_utils()
+    NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = await run_sync(load_network_diagnostic_prompt())
+    logger.info(f"Network diagnostic system prompt loaded successfully.\n {NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD[:500]}...")
+    
 @app.before_request
 async def check_ip():
     if await ip_ban_db.get_all_data(match=f"blocked_ip:{request.access_route[-1]}", cnfrm=True) is True:
@@ -677,12 +679,10 @@ async def flow(task):
                 return jsonify(flow_data), 200
             else:
                 return jsonify(), 400
-        case 'save':
-            cwd = os.getcwd() 
+        case 'save': 
             if data['id'] == 'default':
                 data['id'] = f"flow:{data['name']}:{str(uuid.uuid4())}" 
             job1 = None
-            cwd = os.getcwd() 
             now = datetime.now(tz=timezone.utc).isoformat()
             job_comment=f"auto_job_{data['name']}_{now}"
             task_command = ""

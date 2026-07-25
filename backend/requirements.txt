@@ -10,8 +10,6 @@ asyncio==4.0.0
 nest-asyncio==1.6.0
 quart-wtforms[email]
 setuptools==80.9.0
-passlib==1.7.4
-bcrypt==4.0.1
 tzlocal==5.3.1
 pyjwt==2.10.1
 Werkzeug==3.1.3
@@ -24,3 +22,4 @@ python-telegram-bot
 websockets
 python-crontab==3.3.0
 xmltodict==1.0.4
+bcrypt

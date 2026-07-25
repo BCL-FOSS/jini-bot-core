@@ -2,20 +2,23 @@ import ast
 import argparse
 import asyncio
 from email import message
-from backend.init_app import logger, ANALYSIS_INSTRUCTIONS, NET_ADMIN_INSTRUCTIONS, REQUIRED_OUT_OF_SCOPE_MSG, NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
+from backend.init_app import logger, ANALYSIS_INSTRUCTIONS, NET_ADMIN_INSTRUCTIONS, REQUIRED_OUT_OF_SCOPE_MSG, cl_auth_db, cl_data_db, cwd
+from backend.app import NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
 from backend.ai.utils.Util import Util
 import os
 from uuid import uuid4
 from backend.utils.EmailSenderHandler import EmailSenderHandler
+from datetime import datetime, timedelta, timezone
+import uuid
 
 class FlowRunner:
     def __init__(self):
         self.logger = logger
         self.util_obj = Util()
         self.email_handler = EmailSenderHandler()
-        self.cwd = os.getcwd()
+        self.cwd = cwd
 
-    async def run(self, flow_str: str):
+    async def run(self, flow_str: str, flow_name: str):
         flow_dict = ast.literal_eval(flow_str)
 
         # Parsed flow data
@@ -146,9 +149,9 @@ class FlowRunner:
                             }
                 
                 task_resp, task_resp_json = await self.util_obj.make_http_request(**task_data)
-                if task_resp.status_code == 200:
+                if task_resp == 200:
                      
-                    parser_script_path = os.path.join(self.cwd, 'jini-utils', f'Parsers.py')
+                    parser_script_path = os.path.join(self.cwd, 'utils', 'jini-utils', f'Parsers.py')
                     task_command = f"python3 {parser_script_path} --action {remote_tools_to_execute[node_id]['name']} -o {task_resp_json['output']}"
 
                     if str(remote_tools_to_execute[node_id]['name']).startswith('scan_'):
@@ -162,7 +165,9 @@ class FlowRunner:
 
                     task_return_code, task_stdout, task_stderr = await self.util_obj.run_shell_cmd(task_command)
                     if task_return_code == 0:
-                        task_output+=f"Task {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nOutput: {task_stdout}\n"
+                        task_output+=f"Task: {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nOutput: {task_stdout}\n"
+                    else:
+                        task_output+=f"Task: {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nStatus: Failed\n"
 
             analysis_prompt = (
                                         f"{task_output}"
@@ -178,7 +183,6 @@ class FlowRunner:
                                         + NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
                                     )
                     
-
             payload = {
                                 'model': os.getenv('OLLAMA_MODEL'),
                                 'message':f"{analysis_prompt}",
@@ -189,8 +193,28 @@ class FlowRunner:
             chat_resp, chat_resp_json = await self.util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
 
             if chat_resp.status == 200:
+                email_contact = None
+                now = str(datetime.now(tz=timezone.utc))
+                if await cl_auth_db.get_all_data(match='*primary-contact-email*', cnfrm=True) is False:
+                    await cl_data_db.upload_db_data(id=f'anlys:{agents[0]['name']}:{now}:{str(uuid.uuid4())}')
+                else:
+                    email_contact = await cl_data_db.get_all_data(match='*primary-contact-email*')
 
-                await self.email_handler.send_transactional_email()
+                html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
+                                <p>Jini Monitor Analysis Complete</p>
+                                <p>Workflow: {flow_name}</p>
+                                <p>Prompt: {agents[0]['prompt']}</p>
+                                <p>Response: {chat_resp_json}</p>
+                                <p>Tool(s) Output: {task_output}</p>
+                                </div>"""
+                email_params = {'sender': {'name': 'jini bot', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+                                'to': [{"name": email_contact, "email": email_contact}],
+                                'subject': f'jini Bot Analysis Report - {flow_name} - {now}',
+                                'html_content': html_snippet}
+                email_script_path = os.path.join(self.cwd, 'utils', 'jini-utils', f'EmailMgr.py')
+                email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
+
+                email_code, email_output, email_error = -await self.util_obj.run_shell_cmd(cmd=email_command)
                 
 
 if __name__ == "__main__":

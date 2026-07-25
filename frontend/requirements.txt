@@ -10,8 +10,6 @@ asyncio==4.0.0
 nest-asyncio==1.6.0
 quart-wtforms[email]
 setuptools==80.9.0
-passlib==1.7.4
-bcrypt==4.0.1
 tzlocal==5.3.1
 pyjwt==2.10.1
 openai==1.99.1
@@ -20,3 +18,4 @@ asyncio==4.0.0
 onetimesecret
 aiosmtplib==4.0.2
 httpx==0.28.1
+bcrypt

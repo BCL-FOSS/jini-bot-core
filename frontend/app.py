@@ -17,7 +17,7 @@ from utils.Util import Util
 from utils.RedisDB import RedisDB
 import json
 import os
-from passlib.hash import bcrypt
+import bcrypt
 import secrets
 import jwt
 from datetime import datetime, timezone
@@ -161,7 +161,7 @@ async def index():
             logger.info(sub_dict)
             password_hash = sub_dict.get('pwd')
                 
-            if account_data and bcrypt.verify(password, password_hash) is False:
+            if account_data and bcrypt.checkpw(password, password_hash) is False:
                 await ip_blocker()
                 return Unauthorized()
             

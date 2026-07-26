@@ -1,6 +1,6 @@
 import json
 import os
-from websockets.sync.client import connect
+from websocket import create_connection
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -9,19 +9,26 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from init_app import cl_data_db, util_obj
+from backend.init_app import util_obj
+from backend.app import cl_data_db
+import asyncio
 
 ws_url = f"wss://{os.getenv('SERVER_NAME')}/v1/api/core/bot/ws"
 token = os.getenv("TELEGRAM_BOT_TOKEN")
 
 async def send_to_quart(prompt: str, id: int, act: str) -> str:
-    async with connect(ws_url) as ws:
-        payload = json.dumps({"act": act, "prompt": prompt, "telegram_id": str(id)})
-        await ws.send(payload)
-        raw = await ws.recv()
+    ws = create_connection(url=ws_url)
+    payload = json.dumps({"act": act, "prompt": prompt, "telegram_id": str(id)})
+    await asyncio.to_thread(ws.send, payload=payload)
+    async def receive_resp():
+        raw = await asyncio.to_thread(ws.recv)
         data = json.loads(raw)
         if data.get('telegram_id') and data.get('telegram_id') == str(id):
+            await asyncio.to_thread(ws.close)
             return data.get("response")
+        else:
+            await receive_resp()
+    await receive_resp()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     connecting_id = update.effective_user.id if update.effective_user else update.effective_chat.id
@@ -30,8 +37,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     
     probe_data = await cl_data_db.get_all_data(match=f"prb:*")
+    probe_data_dict = next(iter(probe_data.values()))
     probe_info = ""
-    for prb in probe_data:
+    for prb in probe_data_dict:
         probe_info += f"Probe ID: {prb.get('id')}, Name: {prb.get('name')}, Site: {prb.get('site')}\n"
 
     await context.bot.send_message(chat_id=update.effective_chat.id, text="👋 Hello! I'm your umjini network admin bot.\n" \

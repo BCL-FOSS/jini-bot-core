@@ -20,7 +20,7 @@ class RemoteFlowRunner:
         self.logger.info(workflow)
         workflow_data = workflow['drawflow']['Home']['data']
         self.logger.info(workflow_data)
-        alerts = [{}]
+        alerts = []
         agents = {}
         remote_tools_to_execute = [{}]
         remote_tool_params = {}
@@ -113,20 +113,13 @@ class RemoteFlowRunner:
                         remote_tools_to_execute[node_id]['url'] = node_data['url']
                         remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
 
-                case 'slack':
-                    alerts['tool'] = node_data['name']
-
-                case 'jira':
-                    alerts['tool'] = node_data['name']
-                 
-                case 'email':
-                    alerts['tool'] = node_data['name']
+                case 'slack' | 'jira' | 'email':
+                    alerts.append(node_data['name'])
 
                 case 'smartbot':
                     if node_data['bot-prompt']:
                         agents[0]['prompt'] = node_data['bot-prompt']
                         agents[0]['agent'] = node_data['name']
-
 
         task_output=""
         if remote_tools_to_execute != [{}]:
@@ -186,31 +179,37 @@ class RemoteFlowRunner:
 
             chat_resp, chat_resp_json = await self.util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
 
-            if chat_resp.status == 200:
+            if chat_resp == 200:
                 now = str(datetime.now(tz=timezone.utc))
-                email_contact = await cl_data_db.get_all_data(match='*pct:*')
-                email_contact_data = next(iter(email_contact.values()))
+                for alert in alerts:
+                    match alert:
+                        case 'email':
+                            email_contact = await cl_data_db.get_all_data(match='*pct:*')
+                            email_contact_data = next(iter(email_contact.values()))
 
-                html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
-                                <p>Jini Monitor Analysis Complete</p>
-                                <p>Workflow: {flow_name}</p>
-                                <p>Prompt: {agents[0]['prompt']}</p>
-                                <p>Response: {chat_resp_json}</p>
-                                <p>Tool(s) Output: {task_output}</p>
-                                </div>"""
-                email_params = {'sender': {'name': 'jini bot', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                                'to': [{"name": f'{email_contact_data.get('fname')} {email_contact_data.get('lname')}', "email": email_contact_data.get('eml')}],
-                                'subject': f'jini Bot Analysis Report - {flow_name} - {now}',
-                                'html_content': html_snippet}
-                email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
-                email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
+                            html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
+                                            <p>Jini Monitor Analysis Complete</p>
+                                            <p>Workflow: {flow_name}</p>
+                                            <p>Prompt: {agents[0]['prompt']}</p>
+                                            <p>Response: {chat_resp_json}</p>
+                                            <p>Tool(s) Output: {task_output}</p>
+                                            </div>"""
+                            email_params = {'sender': {'name': 'jini bot', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+                                            'to': [{"name": f'{email_contact_data.get('fname')} {email_contact_data.get('lname')}', "email": email_contact_data.get('eml')}],
+                                            'subject': f'jini Bot Analysis Report - {flow_name} - {now}',
+                                            'html_content': html_snippet}
+                            email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
+                            email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
 
-                email_code, email_output, email_error = -await self.util_obj.run_shell_cmd(cmd=email_command)
+                            email_code, email_output, email_error = await self.util_obj.run_shell_cmd(cmd=email_command)
 
-                if email_code != 0:
-                    logger.info(f'{flow_name} analysis not sent via email')
+                            logger.info(f'code: {email_code}\noutput: {email_output}\nerror: {email_error}')
+                        case 'jira':
+                            jira_script_path = os.path.join(utility_scripts_path, 'JiraMgr.py')
+                            jira_params = {}
+                            jira_command = f"python3 {jira_script_path} -t 'alert' -p {jira_params}"
+                            jira_code, jira_output, jira_error = await self.util_obj.run_shell_cmd(cmd=jira_command)
 
-                logger.info(email_output)
                 anlys_id = f'anlys:{flow_name}:{now}:{str(uuid.uuid4())}'
                 anlys_data = {'id': anlys_id,
                               'data': html_snippet}

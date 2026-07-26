@@ -1,5 +1,5 @@
 services:
-  backend_app:
+  backend:
     restart: always
     build:
       context: .
@@ -29,8 +29,14 @@ services:
       - BREVO_SENDER_EMAIL=${BREVO_SENDER_EMAIL}
       - OLLAMA_MODEL=${OLLAMA_MODEL}
       - API_NAME=${API_NAME}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - JIRA_CLOUD_ID=${JIRA_CLOUD_ID}
+      - JIRA_AUTH_TOKEN=${JIRA_AUTH_TOKEN}
+      - JIRA_AUTH_EMAIL=${JIRA_AUTH_EMAIL}
     
-  frontend_app:
+  frontend:
     restart: always
     build:
       context: .
@@ -51,12 +57,12 @@ services:
       - MAX_AUTH_ATTEMPTS=${MAX_AUTH_ATTEMPTS}
       - API_NAME=${API_NAME}
 
-  smartbot:
+  jini:
     restart: always
     build:
       context: .
-      dockerfile: backend/ai/smartbot/Dockerfile
-    container_name: smartbot
+      dockerfile: backend/ai/Dockerfile
+    container_name: jini
     volumes:
       - smartbot_data:/home/quart
     environment:
@@ -66,9 +72,6 @@ services:
       - OLLAMA_MODEL=${OLLAMA_MODEL}
       - SERVER_NAME=${SERVER_NAME}
       - API_NAME=${API_NAME}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
-      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
       
   ollama:
     image: ollama/ollama:latest
@@ -128,8 +131,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - frontend_app
-      - backend_app
+      - frontend
+      - backend
 
 volumes:
   ip_ban_data:

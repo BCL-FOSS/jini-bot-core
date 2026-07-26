@@ -18,9 +18,9 @@ aiosmtplib==4.0.2
 brevo-python==1.2.0
 httpx==0.28.1
 requests==2.32.5
-python-telegram-bot
-websockets
+websocket-client==1.9.0
 python-crontab==3.3.0
 xmltodict==1.0.4
-bcrypt
+bcrypt==5.0.0
 slack-sdk==3.43.0
+python-telegram-bot

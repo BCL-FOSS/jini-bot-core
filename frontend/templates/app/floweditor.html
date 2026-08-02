@@ -180,7 +180,7 @@
     const mntrURL = "{{ mntr_url }}";
     const flowID = "{{ flow_id }}";
     
-    const isProbeBot= "{{ is_probe_bot }}";
+    const isGenBot= "{{ is_general_bot }}";
     let nodeProbeCounter = 0;
     let currentProbeNodes = {};
     let currentSelectedProbe = null;
@@ -245,7 +245,7 @@
     if (flowID !== "default") {
       const payload = { id: flowID };  
       let flowLoadResp = null
-      if (isProbeBot === 'y') {
+      if (isGenBot === 'n') {
         const selectedProbeURL="{{ probe_api_url }}";
         flowLoadResp = await fetch(`https://${selectedProbeURL}/v1/api/flows/load`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(payload)});
       } else {
@@ -401,13 +401,13 @@
           "id": flowID,
           "name": savename,
           "user_id": "{{ cur_usr_id }}",
-          "type": isProbeBot,
+          "type": isGenBot,
           "schedule": {}
         };
 
         payload = setFlowSchedule(payload);
 
-        if (isProbeBot === 'y') {
+        if (isGenBot === 'n') {
           const prbID = "{{ prb_id }}";
           payload["prb_id"] = prbID;
           newFlowResp = await fetch(`https://${selectedProbeURL}/v1/api/flows/new`, {method:'POST', headers: {'Content-Type': 'application/json', 'x-api-key': "{{ api_key }}"}, body:JSON.stringify(payload)});
@@ -502,7 +502,7 @@
           flowNotificationModal.show();
           return;
         } else {
-          if (isProbeBot === "n") {
+          if (isGenBot === "n") {
             document.getElementById('notificationModalLabel').textContent = "Alert";
             document.getElementById('notif-modal-text').textContent = `Calling remote probe tools from a probe bot is not allowed. Please create a general bot for remote tool calling.`;
             flowNotificationModal.show();
@@ -715,9 +715,9 @@
             const alert_data = {type: 'alert', name: name}
             editor.addNode(name, 0, 0, pos_x, pos_y, name, alert_data, alert);
       } else {
-        if (isProbeBot === "y") {
+        if (isGenBot === "y") {
             document.getElementById('notificationModalLabel').textContent = "Alert";
-            document.getElementById('notif-modal-text').textContent = `Calling local probe tools from a general bot is not allowed. If you wish to have the bot work on a specific probe, please access the flow editor from the probe  dashboard.`;
+            document.getElementById('notif-modal-text').textContent = `Calling local probe tools from a general bot is not allowed. If you wish to have your bot work on a specific probe, please access the flow editor from the probe dashboard.`;
             flowNotificationModal.show();
             return;
           } else {

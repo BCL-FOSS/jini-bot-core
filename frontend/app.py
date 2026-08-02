@@ -276,10 +276,10 @@ async def logout(auth_id):
         resp.delete_cookie("api_access_token")
         return resp
 
-@app.route('/floweditor', defaults={'cmp_id': 'bcl','obsc': url_key, 'flow_id': 'default', 'prb_id': 'default', 'is_probe_bot': None}, methods=['GET', 'POST'])
-@app.route("/floweditor/<string:cmp_id>/<string:obsc>/<string:flow_id>/<string:prb_id>/<string:is_probe_bot>", methods=['GET', 'POST'])
+@app.route('/floweditor', defaults={'cmp_id': 'bcl','obsc': url_key, 'flow_id': 'default', 'prb_id': 'default', 'is_general_bot': None}, methods=['GET', 'POST'])
+@app.route("/floweditor/<string:cmp_id>/<string:obsc>/<string:flow_id>/<string:prb_id>/<string:is_general_bot>", methods=['GET', 'POST'])
 @user_login_required
-async def floweditor(cmp_id, obsc, flow_id, prb_id, is_probe_bot):
+async def floweditor(cmp_id, obsc, flow_id, prb_id, is_general_bot):
     cur_usr_id = current_client.auth_id
     session["csrf_ready"] = True
     user_data, ws_url = await retrieve_user_sess_data(sess_id=cur_usr_id)
@@ -290,7 +290,7 @@ async def floweditor(cmp_id, obsc, flow_id, prb_id, is_probe_bot):
 
     return await render_template("app/floweditor.html", obsc_key=session.get('url_key') ,
                                 cmp_id=cmp_id, all_probes=probe_data, mntr_url=mntr_url, 
-                                user=user_data.get('unm'), cur_usr=user_data.get('unm'), user_ws_url=ws_url, cur_usr_id_id=cur_usr_id, data=user_data, flow_id=flow_id, prb_id=prb_id, cur_usr_id=cur_usr_id, is_probe_bot=is_probe_bot)
+                                user=user_data.get('unm'), cur_usr=user_data.get('unm'), user_ws_url=ws_url, cur_usr_id_id=cur_usr_id, data=user_data, flow_id=flow_id, prb_id=prb_id, cur_usr_id=cur_usr_id, is_general_bot=is_general_bot)
 
 @app.route('/probe', defaults={'cmp_id': 'bcl','obsc': url_key, 'prb_id': 'default'}, methods=['GET', 'POST'])
 @app.route("/probe/<string:cmp_id>/<string:obsc>/<string:prb_id>", methods=['GET', 'POST'])

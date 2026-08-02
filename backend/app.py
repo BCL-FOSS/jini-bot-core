@@ -681,7 +681,7 @@ async def flow(task):
             now = datetime.now(tz=timezone.utc).isoformat()
             job_comment=f"auto_job_{data['name']}_{now}"
             task_command = ""
-            script_path = os.path.join(cwd, 'utils', 'RenoteFlowRunner.py')
+            script_path = os.path.join(cwd, 'utils', 'RemoteFlowRunner.py')
             task_command = f"python3 {script_path} -f {data['flow']} -n {data['name']}"
             job1 = await run_sync(lambda: cron.new(command=task_command, comment=job_comment))()
             scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data['schedule']))()
@@ -734,7 +734,7 @@ async def reset():
 
                         </div>"""
             email_params = {'sender': {'name': 'umjiniti Admin', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                            'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('email')}],
+                            'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('eml')}],
                             'subject': f"New Jini API Key Generated for {prim_contact_dict.get('email')}",
                             'hmtl_content': html_snippet }
             

@@ -20,8 +20,8 @@ class RemoteFlowRunner:
         self.logger.info(workflow)
         workflow_data = workflow['drawflow']['Home']['data']
         self.logger.info(workflow_data)
-        alerts = []
-        agents = {}
+        alerts = [str]
+        agents = [{}]
         remote_tools_to_execute = [{}]
         remote_tool_params = {}
                 
@@ -206,9 +206,14 @@ class RemoteFlowRunner:
                             logger.info(f'code: {email_code}\noutput: {email_output}\nerror: {email_error}')
                         case 'jira':
                             jira_script_path = os.path.join(utility_scripts_path, 'JiraMgr.py')
-                            jira_params = {}
+                            jira_params = {'message': chat_resp_json}
                             jira_command = f"python3 {jira_script_path} -t 'alert' -p {jira_params}"
                             jira_code, jira_output, jira_error = await self.util_obj.run_shell_cmd(cmd=jira_command)
+                        case 'slack':
+                            slack_script_path = os.path.join(utility_scripts_path, 'SlackMgr.py')
+                            slack_params = {}
+                            slack_command = f"python3 {slack_script_path} -t 'alert' -p {slack_params}"
+                            slack_code, slack_output, slack_error = await self.util_obj.run_shell_cmd(cmd=slack_command)
 
                 anlys_id = f'anlys:{flow_name}:{now}:{str(uuid.uuid4())}'
                 anlys_data = {'id': anlys_id,

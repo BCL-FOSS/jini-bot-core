@@ -142,13 +142,13 @@ class RemoteFlowRunner:
                     task_command = f"python3 {parser_script_path} --action {remote_tools_to_execute[node_id]['name']} -o {task_resp_json['output']}"
 
                     if str(remote_tools_to_execute[node_id]['name']).startswith('scan_'):
-                        task_command+=f'--file {task_resp_json['output']}'
+                        task_command+=f' --file {task_resp_json['output']}'
 
                     if str(remote_tools_to_execute[node_id]['name']).startswith('trcrt'):
-                        task_command+=f'-tar {remote_tools_to_execute[node_id]['arguments']['tool_prms']['target']} -pid {remote_tools_to_execute[node_id]['prb_id']}'
+                        task_command+=f' -tar {remote_tools_to_execute[node_id]['arguments']['tool_prms']['target']} -pid {remote_tools_to_execute[node_id]['prb_id']}'
 
                     if str(remote_tools_to_execute[node_id]['name']).startswith('pcap_'):
-                        task_command+=f'-i {remote_tools_to_execute[node_id]['arguments']['tool_prms']['interface']}'
+                        task_command+=f' -i {remote_tools_to_execute[node_id]['arguments']['tool_prms']['interface']}'
 
                     task_return_code, task_stdout, task_stderr = await self.util_obj.run_shell_cmd(task_command)
                     if task_return_code == 0:

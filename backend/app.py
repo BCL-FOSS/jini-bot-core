@@ -627,6 +627,19 @@ async def prbingest():
     else:
         return jsonify(), 400
 
+@app.route("/v1/api/core/probe/analysis", methods=['POST'])
+async def prbanalysis():
+    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
+    jwt_token = request.cookies.get('access_token')
+    if not api_key or not jwt_token:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    await jwt_verification(jwt_token=jwt_token, request=request, api_key=api_key, type='prb')
+    data = await request.get_json()
+    if data is None:
+        return jsonify(), 400
+    await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=data, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+    
 @app.route('/v1/api/core/user/alerts', methods=['POST'])
 async def alerts():
     jwt_token = request.cookies.get("access_token")

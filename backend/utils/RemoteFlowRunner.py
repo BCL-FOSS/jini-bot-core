@@ -152,14 +152,14 @@ class RemoteFlowRunner:
 
                     task_return_code, task_stdout, task_stderr = await self.util_obj.run_shell_cmd(task_command)
                     if task_return_code == 0:
-                        task_output+=f"Task: {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nOutput: {task_stdout}\n"
+                        task_output+=f"Task: {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nOutput: {task_stdout}\n\n"
                     else:
-                        task_output+=f"Task: {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nStatus: Failed\n"
+                        task_output+=f"Task: {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nStatus: {task_stderr}\n"
 
             analysis_prompt = (
                                         f"{task_output}"
                                         + "\n\n"
-                                        f"{agents[0]['prompt']}"
+                                        + f"{agents[0]['prompt']}"
                                         )
                                     
             analysis_instructions = (
@@ -200,9 +200,7 @@ class RemoteFlowRunner:
                                             'html_content': html_snippet}
                             email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
                             email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
-
                             email_code, email_output, email_error = await self.util_obj.run_shell_cmd(cmd=email_command)
-
                             logger.info(f'code: {email_code}\noutput: {email_output}\nerror: {email_error}')
                         case 'jira':
                             jira_script_path = os.path.join(utility_scripts_path, 'JiraMgr.py')

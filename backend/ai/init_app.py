@@ -169,5 +169,4 @@ rag_engine = RAGEngine(
             ollama_model=os.environ.get('OLLAMA_MODEL', 'qwen2.5:7b'),
             mcp_server_url=os.environ.get('MCP_SERVER_URL')
         )
-parser = NetworkToolParser()
 

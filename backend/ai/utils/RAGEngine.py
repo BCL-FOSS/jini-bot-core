@@ -10,7 +10,7 @@ class RAGEngine:
         self,
         collection_name: str = "network_analysis",
         embedding_model: str = "all-MiniLM-L6-v2",
-        ollama_model: str = "qwen2.5:7b",
+        ollama_model: str = "qwen3:1.7b",
         mcp_server_url: str = None
     ):
         """
@@ -245,26 +245,13 @@ class RAGEngine:
         content: str,
         metadata: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Analyze content for anomalies using RAG and LLM
         
-        Args:
-            content: Network tool output
-            metadata: Tool metadata
-        
-        Returns:
-            Dict with anomaly detection results
-        """
-        tool_type = metadata.get('tool_type', 'unknown')
-        
-        # Query for similar historical patterns
         similar = await self.query_similar(
             content,
             n_results=5,
-            where_filter={"tool_type": tool_type}
+            where_filter=metadata
         )
         
-        # Build comparison context
         if similar['results'] and similar['results']['documents']:
             historical_docs = similar['results']['documents'][0][:3]
             historical_context = "\n---\n".join(historical_docs)
@@ -272,7 +259,7 @@ class RAGEngine:
             historical_context = "No historical data available."
         
         # LLM analysis for anomaly detection
-        anomaly_prompt = f"""Analyze the following {tool_type} output for anomalies, security issues, 
+        anomaly_prompt = f"""Analyze the following {metadata.get('flow')} automation workflow network tools output for anomalies, security issues, 
         or unusual patterns. Compare it with historical data if available.
 
         Current Output:
@@ -311,7 +298,6 @@ class RAGEngine:
             }
         
         return {
-            "tool_type": tool_type,
             "anomaly_data": anomaly_data,
             "similar_patterns_found": similar['count']
         }
@@ -381,78 +367,31 @@ class RAGEngine:
         
         return decision_data
     
-    async def process_and_act(
-        self,
-        content: str,
-        metadata: Dict[str, Any],
-        available_tools: str,
-        auto_execute: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Complete pipeline: ingest, detect anomalies, decide action, optionally execute
-        
-        Args:
-            content: Network tool output
-            metadata: Tool metadata
-            available_tools: Available MCP tools
-            auto_execute: Whether to automatically execute recommended actions
-        
-        Returns:
-            Dict with complete processing result
-        """
-        doc_id = f"{metadata.get('tool_type')}_{metadata.get('timestamp')}_{metadata.get('probe', 'default')}"
-        
-        # Ingest the document
-        await self.ingest_document(doc_id, content, metadata)
-        
-        
-
-        content=f"Probe {metadata.get}"
-
-        return anomaly_result, action_decision
-    
-    async def batched_process_and_act(self, batch_data: list, content: str,  metadata: Dict[str, Any], auto_execute: bool = False):
-        """
-        Process a batch of documents with the complete pipeline
-        
-        Args:
-            batch_data: List of dicts with 'content', 'metadata', and 'available_tools'
-        
-        Returns:
-            List of processing results
-        """
-        # Detect anomalies
-        anomaly_result = await self.detect_anomalies(content, metadata)
-                
-        # Decide action
+    async def batch_content_processing(self, content: str,  metadata: Dict[str, Any], available_tools: str = None):
+        anomaly_result = await self.detect_anomalies(content, metadata)                
         action_decision = await self.decide_action(anomaly_result, available_tools)
+        return action_decision
 
-        # Execute actions if auto_execute is enabled
+    async def execute(self, action_decision: Dict[str, Any], auto_execute: bool = False):
         execution_results = []
         if auto_execute is True and action_decision.get('mcp_actions'):
-                    for action in action_decision['mcp_actions']:
-                        tool_name = action.get('tool')
-                        params = action.get('params', {})
-                        if tool_name:
-                            result = await call_mcp(server_url=self.mcp_server_url, tool_call={"name": tool_name, "arguments": params})
-                            if result is None:
-                                logger.error(f"Failed to execute MCP tool: {tool_name} with params: {params}")
-                                return None
-                            execution_results.append({
-                                "tool": tool_name,
-                                "params": params,
-                                "result": result
-                            })
-                
-        return {
-                    "document_id": doc_id,
-                    "ingested": True,
-                    "anomaly_detection": anomaly_result,
+            for action in action_decision['mcp_actions']:
+                tool_name = action.get('tool')
+                params = action.get('params', {})
+                if tool_name:
+                    result = await call_mcp(server_url=self.mcp_server_url, tool_call={"name": tool_name, "arguments": params})
+                    if result is None:
+                        logger.error(f"Failed to execute MCP tool: {tool_name} with params: {params}")
+                        return None
+                    execution_results.append({
+                        "tool": tool_name,
+                        "params": params,
+                        "result": result
+                    }) 
+            return {      
                     "action_decision": action_decision,
                     "execution_results": execution_results if execution_results else None
                 }
-        
-    
     
     async def get_collection_stats(self) -> Dict[str, Any]:
         """Get statistics about the ChromaDB collection"""

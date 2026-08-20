@@ -217,43 +217,6 @@ async def chat():
 
     return jsonify(response_payload)
 
-@app.route('/v1/analysis', methods=['POST'])
-async def analysis():
-    data = await request.get_json()
-    model = data.get("model")
-    instructions = data.get("instructions")
-    message = data.get("message")
-    name = data.get('name')
-
-    # --- Step C: Send conversation to Ollama ---
-    conversation = [
-        {"role": "system", "content": instructions},
-        {"role": "user", "content": message},
-    ]
-
-    ollama_out_clean = await chat_with_ollama(conversation, model)
-    
-    response_payload={
-            "id": f"bot:analysis:{datetime.now(timezone.utc)}:{uuid.uuid4()}",
-            "user_msg": message,
-            "output_text": ollama_out_clean
-        }
-
-    logger.info(response_payload)
-    
-    parsed = None
-    try:
-        parsed = json.loads(ollama_out_clean)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", ollama_out_clean, re.S)
-        if match:
-            try:
-                parsed = json.loads(match.group())
-            except Exception as e:
-                logger.warning(f"Could not parse JSON block: {e}")
-
-    return parsed
-
 @app.route('/v1/stats', methods=['GET'])
 async def get_stats():
     """Get RAG engine statistics"""
@@ -413,7 +376,7 @@ async def query_rag():
         }), 200
     
 @app.route('/v1/analyze', methods=['POST'])
-async def analyze_output():
+async def analyze():
     """
     Analyze tool output for anomalies without ingesting
     
@@ -433,9 +396,6 @@ async def analyze_output():
     if not tool_type or not output:
         return jsonify(), 400
         
-    metadata['tool_type'] = tool_type
-    metadata['timestamp'] = metadata.get('timestamp', datetime.now(timezone.utc).isoformat())
-        
     content = f"Tool: {tool_type}\n{output}"
         
     anomaly_result = await rag_engine.detect_anomalies(content, metadata)
@@ -444,75 +404,16 @@ async def analyze_output():
             "rag_analysis": anomaly_result
         }), 200
     
-@app.route('/v1/process', methods=['POST'])
-async def process_and_act():
-    """
-    Complete pipeline: ingest, analyze, decide action, optionally execute
-    
-    Body:
-    {
-        "tool_type": "nmap",
-        "output": "...",
-        "metadata": {...},
-        "available_tools": ["send_email_alert", "create_jira_ticket"],
-        "auto_execute": false
-    }
-    
-    or
-
-    Body:
-    {
-        "documents": [
-            {
-                "tool_type": "nmap",
-                "output": "...",
-                "metadata": {...},
-                "available_tools": ["send_email_alert", "create_jira_ticket"],
-                "auto_execute": false
-            },
-            ...
-        ]
-    }
-    """
+@app.route('/v1/analyze/batch', methods=['POST'])
+async def analyze_batch():
     data = await request.get_json()
-
-    documents = data.get('documents')
-    if documents:
-        results = await rag_engine.batched_process_and_act(documents)
-        if not results:
-            return jsonify(), 500
-        return jsonify({
-                "data": results
-            }), 200
-
-    tool_type = data.get('tool_type')
-    output = data.get('output')
+    batch_content = data.get('content')
     metadata = data.get('metadata')
     available_tools = data.get('available_tools')
-    auto_execute = data.get('auto_execute', False)
-            
-    if not tool_type or not output:
+    if not batch_content or not metadata or not available_tools:
         return jsonify(), 400
-            
-    metadata['tool_type'] = tool_type
-    metadata['timestamp'] = metadata.get('timestamp', datetime.now(timezone.utc).isoformat())
-            
-    content = f"Tool: {tool_type}\nTimestamp: {metadata['timestamp']}\n\n{output}"
-            
-    result = await rag_engine.process_and_act(
-        content,
-        metadata,
-        available_tools,
-        auto_execute
-    )
-        
-    if not result:
-        return jsonify(), 500
-        
-    return jsonify({
-                "data": result,
-                "db_id": f"processed-{tool_type}-{metadata['timestamp']}-{str(uuid.uuid4())}" 
-            }), 200
+    action_decision = await rag_engine.batch_content_processing(content=batch_content, metadata=json.loads(metadata), available_tools=available_tools)
+    return jsonify(action_decision), 200
     
 @app.route('/v1/history', methods=['GET'])
 async def get_history():

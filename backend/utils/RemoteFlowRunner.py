@@ -1,8 +1,7 @@
 import ast
 import argparse
 import asyncio
-from backend.init_app import logger, ANALYSIS_INSTRUCTIONS, NET_ADMIN_INSTRUCTIONS, util_obj, comm_mgr
-from backend.app import NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
+from backend.init_app import logger, util_obj
 import os
 import json
 
@@ -126,7 +125,6 @@ class RemoteFlowRunner:
                         agent['prompt'] = None
 
         if remote_tools_to_execute != {}:
-            probe_response=""
             all_probes_documents=[]
             all_probes_content=""
             for probe in remote_tools_to_execute:
@@ -144,20 +142,14 @@ class RemoteFlowRunner:
                     all_probes_documents.append(list(probe__document).copy())
                     all_probes_content+=f"{task_resp_json['anlys_output']}\n"
                                                 
-            ingest_payload = {
-                'documents': json.dumps(all_probes_documents)
-            }
-            process_payload = {'content': all_probes_content}
-            llm_url=""
-            if agent['prompt'] is None:
-                llm_url = f"{os.getenv('OLLAMA_PROXY_URL')}/v1/ingest/batch"
-            else:
-                llm_url = f"{os.getenv('OLLAMA_PROXY_URL')}/v1/process"
-
-            chat_resp, chat_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=llm_url, data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-
-            if chat_resp == 200:
-                await comm_mgr.send_llm_response(alerts=alerts, flow_name=flow_name, prompt=agent['prompt'], llm_resp=chat_resp_json, task_output=probe_response)
+            ingest_payload = {'documents': json.dumps(all_probes_documents)}
+            analysis_payload = {'content': all_probes_content}
+            ingest_url = f"{os.getenv('OLLAMA_PROXY_URL')}/v1/ingest/batch"
+            analysis_url = f"{os.getenv('OLLAMA_PROXY_URL')}/v1/analyze/batch"
+            ingest_resp, ingest_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=ingest_url, data=ingest_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+            if ingest_resp == 200:
+                analysis_resp, analysis_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=analysis_url, data=analysis_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+                
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run network automation workflows.")

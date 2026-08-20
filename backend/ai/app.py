@@ -347,18 +347,19 @@ async def ingest_batch():
     }
     """
     data = await request.get_json()
-    documents = data.get('documents', [])
+    documents = data.get('documents')
         
     if not documents:
         return jsonify(), 400
         
     processed_docs = []
-        
-    for doc in documents:
+    parsed_docs = json.loads(documents)
+    for doc in parsed_docs:
         tool_type = doc.get('tool_type')
         output = doc.get('output')
         metadata = doc.get('metadata')
         prb_id = metadata.get('prb_id')
+        content = doc.get('content')
             
         if not tool_type or not output:
             continue
@@ -366,34 +367,7 @@ async def ingest_batch():
         if 'timestamp' not in metadata:
             metadata['timestamp'] = datetime.now(timezone.utc).isoformat()
             
-        metadata['tool_type'] = tool_type
-            
-        parsed = await run_sync(lambda: parser.parse_tool_output(tool_type, output))()
-            
         doc_id = f"prbtool:{prb_id}:{tool_type}:{metadata.get('timestamp')}:{str(uuid.uuid4())}"
-            
-        content = f"Tool: {tool_type}\n"
-        content += f"Timestamp: {metadata.get('timestamp')}\n"
-        content += f"Raw Output:\n{output}\n\n"
-            
-        if parsed.get('anomalies'):
-            content += f"Anomalies:\n{json.dumps(parsed['anomalies'], indent=2)}\n"
-
-        if await cl_data_db.upload_db_data(
-                id=doc_id,
-                data={
-                    "tool_type": tool_type,
-                    "timestamp": metadata.get('timestamp'),
-                    "parsed": json.dumps(parsed),
-                    "has_anomalies": len(parsed.get('anomalies', [])) > 0,
-                    "raw_output": output,
-                    "metadata": json.dumps(metadata),
-                    "content": content
-                }
-            ) is None:
-                return jsonify(), 500
-        else:
-            logger.error(f"Failed to upload data for document {doc_id} to Redis")
             
         processed_docs.append({
                 'id': doc_id,
@@ -459,11 +433,6 @@ async def analyze_output():
     if not tool_type or not output:
         return jsonify(), 400
         
-    parsed = await run_sync(lambda: parser.parse_tool_output(tool_type, output))()
-
-    if not parsed:
-        return jsonify(), 500
-        
     metadata['tool_type'] = tool_type
     metadata['timestamp'] = metadata.get('timestamp', datetime.now(timezone.utc).isoformat())
         
@@ -472,7 +441,6 @@ async def analyze_output():
     anomaly_result = await rag_engine.detect_anomalies(content, metadata)
         
     return jsonify({
-            "parsed": parsed,
             "rag_analysis": anomaly_result
         }), 200
     

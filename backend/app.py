@@ -622,10 +622,12 @@ async def prbingest():
     data = await request.get_json()
     if data is None:
         return jsonify(), 400
-    if await cl_data_db.upload_db_data(id=data['db_id'], data=data) > 0:
+    payload = {
+        'documents': data['output'],       
+    }
+    chat_resp, chat_resp_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/v1/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+    if chat_resp == 200:
         return jsonify(), 200
-    else:
-        return jsonify(), 400
 
 @app.route("/v1/api/core/probes/analysis", methods=['POST'])
 async def prbanalysis():

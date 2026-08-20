@@ -405,38 +405,13 @@ class RAGEngine:
         # Ingest the document
         await self.ingest_document(doc_id, content, metadata)
         
-        # Detect anomalies
-        anomaly_result = await self.detect_anomalies(content, metadata)
         
-        # Decide action
-        action_decision = await self.decide_action(anomaly_result, available_tools)
-        
-        # Execute actions if auto_execute is enabled
-        execution_results = []
-        if auto_execute and action_decision.get('mcp_actions'):
-            for action in action_decision['mcp_actions']:
-                tool_name = action.get('tool')
-                params = action.get('params', {})
-                if tool_name:
-                    result = await call_mcp(server_url=self.mcp_server_url, tool_call={"name": tool_name, "arguments": params})
-                    if result is None:
-                        logger.error(f"Failed to execute MCP tool: {tool_name} with params: {params}")
-                        return None
-                    execution_results.append({
-                        "tool": tool_name,
-                        "params": params,
-                        "result": result
-                    })
-        
-        return {
-            "document_id": doc_id,
-            "ingested": True,
-            "anomaly_detection": anomaly_result,
-            "action_decision": action_decision,
-            "execution_results": execution_results if execution_results else None
-        }
+
+        content=f"Probe {metadata.get}"
+
+        return anomaly_result, action_decision
     
-    async def batched_process_and_act(self, batch_data: list):
+    async def batched_process_and_act(self, batch_data: list, content: str,  metadata: Dict[str, Any], auto_execute: bool = False):
         """
         Process a batch of documents with the complete pipeline
         
@@ -446,18 +421,38 @@ class RAGEngine:
         Returns:
             List of processing results
         """
-        results = []
-        for item in batch_data:
-            content = item.get('content')
-            metadata = item.get('metadata')
-            available_tools = item.get('available_tools', "")
-            auto_execute = item.get('auto_execute', False)
-            
-            if content and metadata:
-                result = await self.process_and_act(content, metadata, available_tools, auto_execute)
-                results.append(result)
+        # Detect anomalies
+        anomaly_result = await self.detect_anomalies(content, metadata)
+                
+        # Decide action
+        action_decision = await self.decide_action(anomaly_result, available_tools)
+
+        # Execute actions if auto_execute is enabled
+        execution_results = []
+        if auto_execute is True and action_decision.get('mcp_actions'):
+                    for action in action_decision['mcp_actions']:
+                        tool_name = action.get('tool')
+                        params = action.get('params', {})
+                        if tool_name:
+                            result = await call_mcp(server_url=self.mcp_server_url, tool_call={"name": tool_name, "arguments": params})
+                            if result is None:
+                                logger.error(f"Failed to execute MCP tool: {tool_name} with params: {params}")
+                                return None
+                            execution_results.append({
+                                "tool": tool_name,
+                                "params": params,
+                                "result": result
+                            })
+                
+        return {
+                    "document_id": doc_id,
+                    "ingested": True,
+                    "anomaly_detection": anomaly_result,
+                    "action_decision": action_decision,
+                    "execution_results": execution_results if execution_results else None
+                }
         
-        return results
+    
     
     async def get_collection_stats(self) -> Dict[str, Any]:
         """Get statistics about the ChromaDB collection"""

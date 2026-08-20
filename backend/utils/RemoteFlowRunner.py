@@ -24,12 +24,13 @@ class RemoteFlowRunner:
             node_data = node.get('data')
             match node_data['name']:
                 case str() as s if s.startswith('prb:'):
-                    remote_tools_to_execute[node_data['name']] = {
-                        'task_data': [],
-                        'url': node_data['url'],
-                        'api_key': node_data['api_key'],
-                        'name': node_data['name']
-                        }
+                    if node_data['name'] not in remote_tools_to_execute:
+                        remote_tools_to_execute[node_data['name']] = {
+                            'task_data': [],
+                            'url': node_data['url'],
+                            'api': node_data['api_key'],
+                            'name': node_data['name']
+                            }  
                     if node_data['prb-trcrttype']:
                         remote_tool_params = {}
                         remote_tool_params['tool_prms']['target'] = node_data['prb-trcrttarget']
@@ -53,7 +54,7 @@ class RemoteFlowRunner:
                         if node_data['prb-perfserver'] and node_data['prb-perftype'] == 'spdtst_clnt':
                             remote_tool_params['tool_prms']['server'] = node_data['prb-perfserver']
 
-                        remote_tools_to_execute[node_data['name']]['task_data'].append({
+                        list(remote_tools_to_execute[node_data['name']]['task_data']).append({
                             'action': node_data['prb-perftype'],
                             'params': remote_tool_params
                         })
@@ -85,7 +86,7 @@ class RemoteFlowRunner:
                             if node_data['prb-scantcpack']:
                                 remote_tool_params['tool_prms']['ack_ports'] = node_data['prb-scantcpack']
 
-                        remote_tools_to_execute[node_data['name']]['task_data'].append({
+                        list(remote_tools_to_execute[node_data['name']]['task_data']).append({
                             'action': node_data['prb-scanstype'],
                             'params': remote_tool_params
                         })
@@ -109,7 +110,7 @@ class RemoteFlowRunner:
                         if node_data['prb-pcaprmiface'] and node_data['prb-pcapmode'] == 'pcap_win' | 'pcap_tux':
                             remote_tool_params['tool_prms']['remote_iface'] = node_data['prb-pcaprmiface']
 
-                        remote_tools_to_execute[node_data['name']]['task_data'].append({
+                        list(remote_tools_to_execute[node_data['name']]['task_data']).append({
                             'action': node_data['prb-pcapmode'],
                             'params': remote_tool_params
                         })
@@ -118,12 +119,16 @@ class RemoteFlowRunner:
                     alerts.append(node_data['name'])
 
                 case 'smartbot':
-                    if node_data['bot-prompt']:
+                    if node_data['bot-prompt'] is not None and node_data['bot-prompt'] != "":
                         agent['prompt'] = node_data['bot-prompt']
                         agent['agent'] = node_data['name']
+                    else:
+                        agent['prompt'] = None
 
         if remote_tools_to_execute != {}:
             probe_response=""
+            all_probes_documents=[]
+            all_probes_content=""
             for probe in remote_tools_to_execute:
                 headers = {'content-type': 'application/json',
                            'x-api-key': probe['api']}
@@ -135,30 +140,21 @@ class RemoteFlowRunner:
                             }
                 task_resp, task_resp_json = await util_obj.make_http_request(**task_data)
                 if task_resp == 200:
-                    probe_response += f"Probe: {probe['name']}\nOutput: {task_resp_json.get('output')}\n\n"
+                    probe__document = json.loads(task_resp_json['output'])
+                    all_probes_documents.append(list(probe__document).copy())
+                    all_probes_content+=f"{task_resp_json['anlys_output']}\n"
+                                                
+            ingest_payload = {
+                'documents': json.dumps(all_probes_documents)
+            }
+            process_payload = {'content': all_probes_content}
+            llm_url=""
+            if agent['prompt'] is None:
+                llm_url = f"{os.getenv('OLLAMA_PROXY_URL')}/v1/ingest/batch"
+            else:
+                llm_url = f"{os.getenv('OLLAMA_PROXY_URL')}/v1/process"
 
-            analysis_prompt = (
-                    f"{probe_response}"
-                    + "\n\n"
-                    + f"{agent['prompt']}"
-                )
-                                            
-            analysis_instructions = (
-                    NET_ADMIN_INSTRUCTIONS
-                    + "\n\n"
-                    + ANALYSIS_INSTRUCTIONS
-                    + "\n\n"
-                    + NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
-                )
-                            
-            payload = {
-                    'model': os.getenv('OLLAMA_MODEL'),
-                    'message': f"{analysis_prompt}",
-                    'name': f"{agent['name']}",
-                    'instructions': analysis_instructions,
-                }
-
-            chat_resp, chat_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+            chat_resp, chat_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=llm_url, data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
 
             if chat_resp == 200:
                 await comm_mgr.send_llm_response(alerts=alerts, flow_name=flow_name, prompt=agent['prompt'], llm_resp=chat_resp_json, task_output=probe_response)

@@ -2,15 +2,15 @@ import re
 import json
 import uuid
 from quart import request, jsonify
-from init_app import app, logger, headers, rag_engine, parser, call_mcp, fetch_mcp_tools, chat_with_ollama, REQUIRED_OUT_OF_SCOPE_MSG, cl_data_db
+from init_app import app, logger, headers, rag_engine, call_mcp, fetch_mcp_tools, chat_with_ollama, REQUIRED_OUT_OF_SCOPE_MSG
 import uuid
+from backend.init_app import cl_data_db
 from datetime import datetime, timezone
 from quart.utils import run_sync
 
 @app.before_serving
 async def db_startup():
     await rag_engine.init_chroma_db()
-    await cl_data_db.connect_db()
 
 @app.route("/v1/chat", methods=["POST"])
 async def chat():
@@ -283,11 +283,12 @@ async def ingest_tool_output():
         return jsonify(), 400
         
     tool_type = data.get('tool_type')
-    output = data.get('output')
+    parsed_output = data.get('parsed_output')
+    raw_output = data.get('output')
     metadata = data.get('metadata', {})
     prb_id = metadata.get('prb_id')
         
-    if not tool_type or not output:
+    if not tool_type or not parsed_output:
         return jsonify(), 400
         
     if 'timestamp' not in metadata:
@@ -295,18 +296,16 @@ async def ingest_tool_output():
         
     metadata['tool_type'] = tool_type
         
-    parsed = await run_sync(lambda: parser.parse_tool_output(tool_type, output))()
-        
     doc_id = f"prbtool:{prb_id}:{tool_type}:{metadata.get('timestamp')}:{str(uuid.uuid4())}"
         
     content = f"Tool: {tool_type}\n"
     content += f"Timestamp: {metadata.get('timestamp')}\n"
     content += f"Probe: {metadata.get('prb_id', 'N/A')}\n"
     content += f"Target: {metadata.get('target', 'N/A')}\n\n"
-    content += f"Raw Output:\n{output}\n\n"
+    content += f"Raw Output:\n{raw_output}\n\n"
         
-    if parsed.get('anomalies'):
-        content += f"Detected Anomalies:\n{json.dumps(parsed['anomalies'], indent=2)}\n"
+    if parsed_output.get('anomalies'):
+        content += f"Detected Anomalies:\n{json.dumps(parsed_output['anomalies'], indent=2)}\n"
 
     if await rag_engine.ingest_document(doc_id, content, metadata) is True:
 
@@ -315,8 +314,8 @@ async def ingest_tool_output():
                 data={
                     "tool_type": tool_type,
                     "timestamp": metadata.get('timestamp'),
-                    "parsed": json.dumps(parsed),
-                    "has_anomalies": len(parsed.get('anomalies', [])) > 0
+                    "parsed": json.dumps(parsed_output),
+                    "has_anomalies": len(parsed_output.get('anomalies', [])) > 0
                 }
             ) is not None:
                 return jsonify(), 200

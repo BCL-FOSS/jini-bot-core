@@ -478,17 +478,73 @@
       if (ev.type === "touchend") {
         const parentdrawflow = document.elementFromPoint( mobile_last_move.touches[0].clientX, mobile_last_move.touches[0].clientY).closest("#drawflow");
         if(parentdrawflow != null) {
+          if (mobile_item_selec.startsWith("prb:") && nodeProbeCounter === 3) {
+            document.getElementById('notificationModalLabel').textContent = "Probe Limit Reached";
+            document.getElementById('notif-modal-text').textContent = `You have reached the maximum number of probes allowed. Please remove a probe before adding another one.`;
+            flowNotificationModal.show();
+            return;
+          }
+
+          if (mobile_item_selec.startsWith("prb:") && isGenBot === "n") {
+            document.getElementById('notificationModalLabel').textContent = "Alert";
+            document.getElementById('notif-modal-text').textContent = `Calling remote probe tools from a probe bot is not allowed. Please create a general bot for remote tool calling.`;
+            flowNotificationModal.show();
+            return;
+          }
+
+          if (mobile_item_selec.startsWith("prb:") && isGenBot === "y") {
+            const selectedProbeTools = document.getElementById(mobile_item_selec);
+            const probeUrl = selectedProbeTools.dataset.url;
+            const probeApi = selectedProbeTools.dataset.api;
+
+            if (probeUrl === "" || probeApi === "") {
+              document.getElementById('notificationModalLabel').textContent = "Alert";
+              document.getElementById('notif-modal-text').textContent = `The selected probe does not have the necessary information to be added to the flow. Please check the probe configuration.`;
+              flowNotificationModal.show();
+              return;
+            }
+
+            addNodeToDrawFlow(mobile_item_selec, mobile_last_move.touches[0].clientX, mobile_last_move.touches[0].clientY, probeApi, probeUrl);
+          }
+
           addNodeToDrawFlow(mobile_item_selec, mobile_last_move.touches[0].clientX, mobile_last_move.touches[0].clientY);
         }
         mobile_item_selec = '';
       } else {
         ev.preventDefault();
         const data = ev.dataTransfer.getData("node");
+        if (data.startsWith("prb:") && nodeProbeCounter === 3) {
+          document.getElementById('notificationModalLabel').textContent = "Probe Limit Reached";
+          document.getElementById('notif-modal-text').textContent = `You have reached the maximum number of probes allowed. Please remove a probe before adding another one.`;
+          flowNotificationModal.show();
+          return;
+        }
+        if (data.startsWith("prb:") && isGenBot === "n") {
+          document.getElementById('notificationModalLabel').textContent = "Alert";
+          document.getElementById('notif-modal-text').textContent = `Calling remote probe tools from a probe bot is not allowed. Please create a general bot for remote tool calling.`;
+          flowNotificationModal.show();
+          return;
+        }
+        if (data.startsWith("prb:") && isGenBot === "y") {
+          const selectedProbeTools = document.getElementById(data);
+          const probeUrl = selectedProbeTools.dataset.url;
+          const probeApi = selectedProbeTools.dataset.api;
+
+          if (probeUrl === "" || probeApi === "") {
+            document.getElementById('notificationModalLabel').textContent = "Alert";
+            document.getElementById('notif-modal-text').textContent = `The selected probe does not have the necessary information to be added to the flow. Please check the probe configuration.`;
+            flowNotificationModal.show();
+            return;
+          }
+
+          addNodeToDrawFlow(data, ev.clientX, ev.clientY, probeApi, probeUrl);
+        }
+
         addNodeToDrawFlow(data, ev.clientX, ev.clientY);
       }
     }
 
-    function addNodeToDrawFlow(name, pos_x, pos_y) {
+    function addNodeToDrawFlow(name, pos_x, pos_y, api_key=null, probe_url=null) {
       if(editor.editor_mode === 'fixed') {
         return;
       }
@@ -496,24 +552,7 @@
       pos_y = pos_y * ( editor.precanvas.clientHeight / (editor.precanvas.clientHeight * editor.zoom)) - (editor.precanvas.getBoundingClientRect().y * ( editor.precanvas.clientHeight / (editor.precanvas.clientHeight * editor.zoom)));
 
       if (typeof name === "string" && name.startsWith("prb:")) {
-        if (nodeProbeCounter === 3) {
-          document.getElementById('notificationModalLabel').textContent = "Probe Limit Reached";
-          document.getElementById('notif-modal-text').textContent = `You have reached the maximum number of probes allowed. Please remove a probe before adding another one.`;
-          flowNotificationModal.show();
-          return;
-        } else {
-          if (isGenBot === "n") {
-            document.getElementById('notificationModalLabel').textContent = "Alert";
-            document.getElementById('notif-modal-text').textContent = `Calling remote probe tools from a probe bot is not allowed. Please create a general bot for remote tool calling.`;
-            flowNotificationModal.show();
-            return;
-          } else {
-            const selectedProbeTools = document.getElementById(name);
-            const probeUrl = selectedProbeTools.dataset.url;
-            const probeApi = selectedProbeTools.dataset.api;
-            const probeId = selectedProbeTools.dataset.id;
-
-            const probe = `
+        const probe = `
               <div class="title-box">Remote Probe</div>
               <div class="box" style="background-color: #8b7da8;">
                 <nav>
@@ -700,10 +739,8 @@
                   </div>              
               </div>
               `;
-            const probe_data = { type: 'probe', name: name, url: probeUrl, api_key: probeApi, id: probeId };
-            editor.addNode(name, 0, 0, pos_x, pos_y, name, probe_data, probe);
-          }
-        }
+        const probe_data = { type: 'probe', name: name, url: probe_url, api: api_key };
+        editor.addNode(name, 0, 0, pos_x, pos_y, name, probe_data, probe);  
       } else if (typeof name === 'string' && name === 'slack' || name === 'jira' || name === 'email') {
         const alert = `
             <div>

@@ -1,35 +1,37 @@
 import ast
 import argparse
 import asyncio
-from backend.init_app import logger, ANALYSIS_INSTRUCTIONS, NET_ADMIN_INSTRUCTIONS, utility_scripts_path
-from backend.app import NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD, cl_data_db
-from backend.ai.utils.Util import Util
+from backend.init_app import logger, ANALYSIS_INSTRUCTIONS, NET_ADMIN_INSTRUCTIONS, util_obj, comm_mgr
+from backend.app import NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
 import os
-from datetime import datetime, timezone
-import uuid
+import json
 
 class RemoteFlowRunner:
     def __init__(self):
-        self.logger = logger
-        self.util_obj = Util()
+        pass
    
     async def run(self, flow_str: str, flow_name: str):
         flow_dict = ast.literal_eval(flow_str)
-        # Parsed flow data
         workflow = flow_dict
-        self.logger.info(workflow)
+        logger.info(workflow)
         workflow_data = workflow['drawflow']['Home']['data']
-        self.logger.info(workflow_data)
+        logger.info(workflow_data)
         alerts = [str]
-        agents = [{}]
-        remote_tools_to_execute = [{}]
-        remote_tool_params = {}
+        agent = {}
+        remote_tools_to_execute = {}
                 
         for node_id, node in workflow_data.items():
             node_data = node.get('data')
             match node_data['name']:
                 case str() as s if s.startswith('prb:'):
+                    remote_tools_to_execute[node_data['name']] = {
+                        'task_data': [],
+                        'url': node_data['url'],
+                        'api_key': node_data['api_key'],
+                        'name': node_data['name']
+                        }
                     if node_data['prb-trcrttype']:
+                        remote_tool_params = {}
                         remote_tool_params['tool_prms']['target'] = node_data['prb-trcrttarget']
 
                         if node_data['prb-trcrtoptions']:
@@ -39,25 +41,25 @@ class RemoteFlowRunner:
                         if node_data['prb-trcrtdnsserver'] and node_data['prb-trcrttype'] == 'trcrt_dns':
                             remote_tool_params['tool_prms']['server'] = node_data['prb-trcrtdnsserver']
 
-                        remote_tools_to_execute[node_id]['name'] = node_data['prb-trcrttype']
-                        remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
-                        remote_tools_to_execute[node_id]['prb_id'] = node_data['id']
-                        remote_tools_to_execute[node_id]['url'] = node_data['url']
-                        remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
+                        remote_tools_to_execute[node_data['name']]['task_data'].append({
+                            'action': node_data['prb-trcrttype'],
+                            'params': remote_tool_params
+                        })
 
                     if node_data['prb-perftype']:
+                        remote_tool_params = {}
                         if node_data['prb-perfoptions']:
                             remote_tool_params['tool_prms']['options'] = node_data['prb-perfoptions']
                         if node_data['prb-perfserver'] and node_data['prb-perftype'] == 'spdtst_clnt':
                             remote_tool_params['tool_prms']['server'] = node_data['prb-perfserver']
 
-                        remote_tools_to_execute[node_id]['name'] = node_data['prb-perftype']
-                        remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
-                        remote_tools_to_execute[node_id]['prb_id'] = node_data['id']
-                        remote_tools_to_execute[node_id]['url'] = node_data['url']
-                        remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
+                        remote_tools_to_execute[node_data['name']]['task_data'].append({
+                            'action': node_data['prb-perftype'],
+                            'params': remote_tool_params
+                        })
 
                     if node_data['prb-scanstype']:
+                        remote_tool_params = {}
                         if node_data['prb-scantarget']:
                             remote_tool_params['tool_prms']['target'] = node_data['prb-scantarget']
 
@@ -83,13 +85,13 @@ class RemoteFlowRunner:
                             if node_data['prb-scantcpack']:
                                 remote_tool_params['tool_prms']['ack_ports'] = node_data['prb-scantcpack']
 
-                        remote_tools_to_execute[node_id]['name'] = node_data['prb-scanstype']
-                        remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
-                        remote_tools_to_execute[node_id]['prb_id'] = node_data['id']
-                        remote_tools_to_execute[node_id]['url'] = node_data['url']
-                        remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
+                        remote_tools_to_execute[node_data['name']]['task_data'].append({
+                            'action': node_data['prb-scanstype'],
+                            'params': remote_tool_params
+                        })
 
                     if node_data['prb-pcapmode']:
+                        remote_tool_params = {}
                         if node_data['prb-pcapmode'] != 'pcap_lcl' and node_data['prb-pcaptrmuser'] and node_data['prb-pcaptrmpass'] and node_data['prb-pcaptrmhost']:
                             remote_tool_params['tool_prms']['usr'] = node_data['prb-pcaptrmuser']
                             remote_tool_params['tool_prms']['pwd'] = node_data['prb-pcaptrmpass']
@@ -107,119 +109,59 @@ class RemoteFlowRunner:
                         if node_data['prb-pcaprmiface'] and node_data['prb-pcapmode'] == 'pcap_win' | 'pcap_tux':
                             remote_tool_params['tool_prms']['remote_iface'] = node_data['prb-pcaprmiface']
 
-                        remote_tools_to_execute[node_id]['name'] = node_data['prb-pcapmode']
-                        remote_tools_to_execute[node_id]['arguments'] = remote_tool_params
-                        remote_tools_to_execute[node_id]['prb_id'] = node_data['id']
-                        remote_tools_to_execute[node_id]['url'] = node_data['url']
-                        remote_tools_to_execute[node_id]['api_key'] = node_data['api_key']
+                        remote_tools_to_execute[node_data['name']]['task_data'].append({
+                            'action': node_data['prb-pcapmode'],
+                            'params': remote_tool_params
+                        })
 
                 case 'slack' | 'jira' | 'email':
                     alerts.append(node_data['name'])
 
                 case 'smartbot':
                     if node_data['bot-prompt']:
-                        agents[0]['prompt'] = node_data['bot-prompt']
-                        agents[0]['agent'] = node_data['name']
+                        agent['prompt'] = node_data['bot-prompt']
+                        agent['agent'] = node_data['name']
 
-        task_output=""
-        if remote_tools_to_execute != [{}]:
-            for node_id in remote_tools_to_execute:
+        if remote_tools_to_execute != {}:
+            probe_response=""
+            for probe in remote_tools_to_execute:
                 headers = {'content-type': 'application/json',
-                           'x-api-key': [remote_tools_to_execute[node_id]['api_key']]}
-                task_data = {'url': f"https://{remote_tools_to_execute[node_id]['url']}/v1/api/tasks/exec",
+                           'x-api-key': probe['api']}
+                task_data = {'url': f"{probe['url']}/v1/api/tasks/exec",
                             'headers': headers,
                             'data': {
-                                    'action': remote_tools_to_execute[node_id]['name'],
-                                    'params': remote_tools_to_execute[node_id]['arguments'],
-                                    'prb_id': remote_tools_to_execute[node_id]['prb_id'],
+                                    'tools_list': json.dumps(probe['task_data'])
                                 }
                             }
-                
-                task_resp, task_resp_json = await self.util_obj.make_http_request(**task_data)
+                task_resp, task_resp_json = await util_obj.make_http_request(**task_data)
                 if task_resp == 200:
-                     
-                    parser_script_path = os.path.join(utility_scripts_path, f'Parsers.py')
-                    task_command = f"python3 {parser_script_path} --action {remote_tools_to_execute[node_id]['name']} -o {task_resp_json['output']}"
-
-                    if str(remote_tools_to_execute[node_id]['name']).startswith('scan_'):
-                        task_command+=f' --file {task_resp_json['output']}'
-
-                    if str(remote_tools_to_execute[node_id]['name']).startswith('trcrt'):
-                        task_command+=f' -tar {remote_tools_to_execute[node_id]['arguments']['tool_prms']['target']} -pid {remote_tools_to_execute[node_id]['prb_id']}'
-
-                    if str(remote_tools_to_execute[node_id]['name']).startswith('pcap_'):
-                        task_command+=f' -i {remote_tools_to_execute[node_id]['arguments']['tool_prms']['interface']}'
-
-                    task_return_code, task_stdout, task_stderr = await self.util_obj.run_shell_cmd(task_command)
-                    if task_return_code == 0:
-                        task_output+=f"Task: {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nOutput: {task_stdout}\n\n"
-                    else:
-                        task_output+=f"Task: {remote_tools_to_execute[node_id]['name']}\nProbe: {remote_tools_to_execute[node_id]['prb_id']}\nStatus: {task_stderr}\n"
+                    probe_response += f"Probe: {probe['name']}\nOutput: {task_resp_json.get('output')}\n\n"
 
             analysis_prompt = (
-                                        f"{task_output}"
-                                        + "\n\n"
-                                        + f"{agents[0]['prompt']}"
-                                        )
-                                    
+                    f"{probe_response}"
+                    + "\n\n"
+                    + f"{agent['prompt']}"
+                )
+                                            
             analysis_instructions = (
-                                        NET_ADMIN_INSTRUCTIONS
-                                        + "\n\n"
-                                        + ANALYSIS_INSTRUCTIONS
-                                        + "\n\n"
-                                        + NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
-                                    )
-                    
+                    NET_ADMIN_INSTRUCTIONS
+                    + "\n\n"
+                    + ANALYSIS_INSTRUCTIONS
+                    + "\n\n"
+                    + NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
+                )
+                            
             payload = {
-                                'model': os.getenv('OLLAMA_MODEL'),
-                                'message':f"{analysis_prompt}",
-                                'name':f'{agents[0]['name']}',
-                                'instructions': analysis_instructions,
-                            }
+                    'model': os.getenv('OLLAMA_MODEL'),
+                    'message': f"{analysis_prompt}",
+                    'name': f"{agent['name']}",
+                    'instructions': analysis_instructions,
+                }
 
-            chat_resp, chat_resp_json = await self.util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+            chat_resp, chat_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
 
             if chat_resp == 200:
-                now = str(datetime.now(tz=timezone.utc))
-                for alert in alerts:
-                    match alert:
-                        case 'email':
-                            email_contact = await cl_data_db.get_all_data(match='*pct:*')
-                            email_contact_data = next(iter(email_contact.values()))
-
-                            html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
-                                            <p>Jini Monitor Analysis Complete</p>
-                                            <p>Workflow: {flow_name}</p>
-                                            <p>Prompt: {agents[0]['prompt']}</p>
-                                            <p>Response: {chat_resp_json}</p>
-                                            <p>Tool(s) Output: {task_output}</p>
-                                            </div>"""
-                            email_params = {'sender': {'name': 'jini bot', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                                            'to': [{"name": f'{email_contact_data.get('fname')} {email_contact_data.get('lname')}', "email": email_contact_data.get('eml')}],
-                                            'subject': f'jini Bot Analysis Report - {flow_name} - {now}',
-                                            'html_content': html_snippet}
-                            email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
-                            email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
-                            email_code, email_output, email_error = await self.util_obj.run_shell_cmd(cmd=email_command)
-                            logger.info(f'code: {email_code}\noutput: {email_output}\nerror: {email_error}')
-                        case 'jira':
-                            jira_script_path = os.path.join(utility_scripts_path, 'JiraMgr.py')
-                            jira_params = {'message': chat_resp_json}
-                            jira_command = f"python3 {jira_script_path} -t 'alert' -p {jira_params}"
-                            jira_code, jira_output, jira_error = await self.util_obj.run_shell_cmd(cmd=jira_command)
-                        case 'slack':
-                            slack_script_path = os.path.join(utility_scripts_path, 'SlackMgr.py')
-                            slack_params = {}
-                            slack_command = f"python3 {slack_script_path} -t 'alert' -p {slack_params}"
-                            slack_code, slack_output, slack_error = await self.util_obj.run_shell_cmd(cmd=slack_command)
-
-                anlys_id = f'anlys:{flow_name}:{now}:{str(uuid.uuid4())}'
-                anlys_data = {'id': anlys_id,
-                              'data': html_snippet}
-
-                if await cl_data_db.upload_db_data(id=anlys_id, data=anlys_data) > 0:
-                    logger.info(f'{flow_name} analysis complete')
-                    return
+                await comm_mgr.send_llm_response(alerts=alerts, flow_name=flow_name, prompt=agent['prompt'], llm_resp=chat_resp_json, task_output=probe_response)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run network automation workflows.")

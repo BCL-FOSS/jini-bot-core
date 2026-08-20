@@ -4,7 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path
+from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, comm_mgr
 from quart_rate_limiter import rate_exempt
 import os
 from quart import (websocket, abort, jsonify)
@@ -645,8 +645,7 @@ async def prbanalysis():
         + ANALYSIS_INSTRUCTIONS
         + "\n\n"
         + NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
-        )
-                        
+        )                 
     payload = {
         'model': os.getenv('OLLAMA_MODEL'),
         'message': f"{analysis_prompt}",
@@ -654,51 +653,10 @@ async def prbanalysis():
         'instructions': analysis_instructions,
     }
     chat_resp, chat_resp_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-
     if chat_resp == 200:
-        alerts = str(data['notif_list']).split(',') if data.get('notif_list') else []
-        for alert in alerts:
-            match alert:
-                case 'email':
-                    email_contact = await cl_data_db.get_all_data(match='*pct:*')
-                    email_contact_data = next(iter(email_contact.values()))
-            
-                    html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
-                                                        <p>Jini Monitor Analysis Complete</p>
-                                                        <p>Probe ID: {data['prb_id']}</p>
-                                                        <p>Prompt: {data['prompt']}</p>
-                                                        <p>Response: {chat_resp_data}</p>
-                                                        </div>"""
-                    email_params = {'sender': {'name': 'jini bot', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                                                        'to': [{"name": f'{email_contact_data.get('fname')} {email_contact_data.get('lname')}', "email": email_contact_data.get('eml')}],
-                                                        'subject': f'jini Bot Analysis Report - {data["prb_id"]} - {data['timestamp']}',
-                                                        'html_content': html_snippet}
-                    email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
-                    email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
-                    email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
-                    logger.info(f'code: {email_code}\noutput: {email_output}\nerror: {email_error}')
-                case 'jira':
-                    jira_script_path = os.path.join(utility_scripts_path, 'JiraMgr.py')
-                    jira_params = {'message': chat_resp_data}
-                    jira_command = f"python3 {jira_script_path} -t 'alert' -p {jira_params}"
-                    jira_code, jira_output, jira_error = await util_obj.run_shell_cmd(cmd=jira_command)
-                case 'slack':
-                    slack_script_path = os.path.join(utility_scripts_path, 'SlackMgr.py')
-                    slack_params = {}
-                    slack_command = f"python3 {slack_script_path} -t 'alert' -p {slack_params}"
-                    slack_code, slack_output, slack_error = await util_obj.run_shell_cmd(cmd=slack_command)
-            
-            anlys_id = f'anlys:{data["prb_id"]}:{data['timestamp']}:{str(uuid.uuid4())}'
-            anlys_data = {'id': anlys_id,
-                                          'data': html_snippet}
-            
-            if await cl_data_db.upload_db_data(id=anlys_id, data=anlys_data) > 0:
-                logger.info(f'{data["prb_id"]} analysis complete')
-                return jsonify(), 200
-            else:
-                logger.error(f'Error uploading analysis data for {data["prb_id"]}')
-                return jsonify(), 400
-
+        alerts = str(data['notif_list']).split(',')
+        await comm_mgr.send_llm_response(alerts=alerts, flow_name=data['name'], prompt=data['prompt'], llm_resp=chat_resp_data, task_output=data['task_output'])
+        
 @app.route('/v1/api/core/user/alerts', methods=['POST'])
 async def alerts():
     jwt_token = request.cookies.get("access_token")

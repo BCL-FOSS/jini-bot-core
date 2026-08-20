@@ -12,6 +12,7 @@ from crontab import CronTab
 from ai.utils.RedisDB import RedisDB
 from utils.WSRateLimiter import WSRateLimiter
 from onetimesecret import OneTimeSecretCli
+from utils.CommMgr import CommMgr
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('passlib').setLevel(logging.ERROR)
@@ -44,6 +45,7 @@ ip_ban_db = RedisDB(hostname=os.getenv('IP_BAN_DB'),
                     port=os.getenv('IP_BAN_DB_PORT'))
 ws_rate_limiter = WSRateLimiter(redis_host=os.getenv('RATE_LIMIT_DB'), 
                                 redis_port=os.getenv('RATE_LIMIT_DB_PORT'))
+comm_mgr = CommMgr()
 REQUIRED_OUT_OF_SCOPE_MSG = "Please provide a question or request related to network administration or the available MCP tools."
 NET_ADMIN_INSTRUCTIONS = (
                             "You are a Network Admin assistant with knowledge of "

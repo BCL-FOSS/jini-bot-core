@@ -93,7 +93,7 @@ class Util:
             return None
 
         if not match:
-            return text, ""
+            return text, "".strip()
         
         text_before = text[:match.start()].rstrip()
         text_after = text[match.end():].lstrip()

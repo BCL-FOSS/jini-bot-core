@@ -124,8 +124,8 @@ class RAGEngine:
     
     async def query_similar(
         self,
-        query_text: str,
-        n_results: int = 5,
+        query_text: Optional[str],
+        n_results: Optional[int] = 5,
         where_filter: Optional[Dict] = None,
         where_doc_filter: Optional[Dict] = None
     ) -> Dict[str, Any]:
@@ -193,8 +193,9 @@ class RAGEngine:
     
     async def rag_query(
         self,
-        query: str,
-        n_results: int = 3,
+        prompt: str,
+        query: Optional[str],
+        n_results: Optional[int] = 3,
         where_filter: Optional[Dict] = None,
         where_doc_filter: Optional[Dict] = None
     ) -> Dict[str, Any]:
@@ -232,7 +233,7 @@ class RAGEngine:
         context = "\n---\n".join(context_parts)
         
         # Analyze with LLM
-        analysis = await self.analyze_with_llm(context, query)
+        analysis = await self.analyze_with_llm(context, prompt)
         
         return {
             "query": query,

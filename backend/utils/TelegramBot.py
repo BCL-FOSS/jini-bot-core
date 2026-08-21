@@ -48,13 +48,14 @@ async def chat_update(update: Update):
     await asyncio.sleep(0.2)
 
 async def check_probes_status(app: Application):
+    global connected_probes
     for probe in connected_probes.values():
         ws_url = f"wss://{os.getenv('SERVER_NAME')}/v1/api/core/channels/probe/heartbeat/{probe['id']}/{1}"
-        asyncio.create_task(alerts_telegram_users(ws_url=ws_url, application=app))
+        connected_probes[probe['prb_id']]['alerts'] = asyncio.create_task(alerts_telegram_users(ws_url=ws_url, application=app))
+        await asyncio.sleep(0.1)
 
-async def _receive_telegram_bot(prompt: str):
+async def execute_tool_call(prompt: str):
     prompt, prb_id = await util_obj.split_text_by_keyword(prompt.lower(), keyword="prb_id:", cnfrm=True)
-
     if await cl_data_db.get_all_data(match=f'*{prb_id}*', cnfrm=True) is True:
         selected_probe = await cl_data_db.get_all_data(match=f'*{prb_id}*')
         selected_probe_dict = next(iter(selected_probe.values()))
@@ -93,6 +94,7 @@ async def _receive_telegram_bot(prompt: str):
                 return REQUIRED_OUT_OF_SCOPE_MSG
             else:
                 documents=[]
+                all_content=""
                 logger.info(f"Request result: {tool_resp['output_text']}\n")
                 logger.info(type(tool_resp['output_text']))
                 data = json.loads(tool_resp['output_text'])
@@ -127,8 +129,23 @@ async def _receive_telegram_bot(prompt: str):
                         "auto_execute": False,
                         "id": doc_id
                         }) 
+                    all_content+=f"{content}\n\n"
 
-                status, tool_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data={'docuements': json.dumps(documents)}, timeout=int(os.getenv('REQUEST_TIMEOUT')))                   
+                status, tool_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data={'docuements': json.dumps(documents)}, timeout=int(os.getenv('REQUEST_TIMEOUT')))      
+
+                if status == 200:
+                    anlys_payload = {
+                        'content': all_content,
+                        'metadata': json.dumps({"type": f"chat_{prb_id}",
+                                                "prb_id": f"{prb_id}"}),
+                        'available_tools': data['tool_instructions'],
+                        'detect_type': 1
+                    }
+                    anlys_status, anlys_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch", data=anlys_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))  
+
+                    if anlys_status == 200:
+                        return anlys_resp
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     connecting_id = update.effective_user.id if update.effective_user else update.effective_chat.id
@@ -161,13 +178,10 @@ async def exec(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     
     prompt = " ".join(context.args)
-
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action="typing"
     )
-
-    await _receive_telegram_bot(prompt=prompt)
-    
+    response = await execute_tool_call(prompt=prompt)
     await update.message.reply_text(response)
 
 async def query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,8 +197,25 @@ async def query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action="typing"
     )
+    payload = {}
+    llm_prompt, query_prompt = await util_obj.split_text_by_keyword(prompt, keyword="query:")
+    payload['prompt'] = llm_prompt
+
+    if query_prompt != "".strip():
+        parsed_query, filter = await util_obj.split_text_by_keyword(query_prompt, keyword="filter:")
+        if filter == "".strip():
+            payload['query'] = query_prompt
+        else:
+            payload['query'] = parsed_query
+            parsed_filter, doc_filter = await util_obj.split_text_by_keyword(query_prompt, keyword="doc_filter:")
+            if doc_filter == "".strip():
+                payload['filter'] = parsed_filter
+            else:
+                payload['doc_filter'] = doc_filter
+
+    status, resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/query", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))  
   
-    await update.message.reply_text(response)
+    await update.message.reply_text(resp['result'])
 
 async def send_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
     alert_msg = " ".join(context.args)
@@ -209,8 +240,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action="typing"
     )
-        
-    await update.message.reply_text(response)
 
 def main() -> None:
     app = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
@@ -218,7 +247,7 @@ def main() -> None:
     app.add_handler(CommandHandler("query", query))
     app.add_handler(CommandHandler("exec", exec))
     app.add_handler(CommandHandler("send", send_alert))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    #app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.COMMAND, unknown))  
     app.run_polling()
     monitor_task = asyncio.create_task(check_probes_status(app=app))

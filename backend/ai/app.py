@@ -362,11 +362,13 @@ async def query_rag():
     query = data.get('query')
     n_results = data.get('n_results', 5)
     where_filter = data.get('filter')
+    prompt = data.get('prompt')
+    where_doc_filter = data.get('doc_filter')
         
     if not query:
         return jsonify(), 400
         
-    result = await rag_engine.rag_query(query, n_results, where_filter)
+    result = await rag_engine.rag_query(query=query, n_results=n_results, where_filter=where_filter, prompt=prompt, where_doc_filter=where_doc_filter)
         
     return jsonify({
             "result": result

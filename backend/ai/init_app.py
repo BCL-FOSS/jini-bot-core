@@ -7,20 +7,24 @@ import json
 import re
 from utils.RedisDB import RedisDB
 from utils.Util import Util
+from typing import List, Dict, Any, Optional
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('passlib').setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
-
 util_obj = Util()
-
 app = Quart(__name__)
 OLLAMA_URL = "http://ollama:11434/api/chat"
-
 cl_data_db = RedisDB(hostname=os.environ.get('CLIENT_DATA_DB'),
                                                     port=os.environ.get('CLIENT_DATA_DB_PORT'))
 REQUIRED_OUT_OF_SCOPE_MSG = "Please provide a question or request related to network administration or the available MCP tools."
-
+# Initialize RAG Engine
+rag_engine = RAGEngine(
+            collection_name=os.environ.get('COLLECTION_NAME', 'network_analysis'),
+            embedding_model=os.environ.get('EMBEDDING_MODEL', 'all-MiniLM-L6-v2'),
+            ollama_model=os.environ.get('OLLAMA_MODEL', 'qwen2.5:7b'),
+            mcp_server_url=os.environ.get('MCP_SERVER_URL')
+        )
 # Headers and payloads to initialize FastMCP connections
 headers = {
     'accept': 'application/json, text/event-stream',
@@ -44,15 +48,13 @@ init_complete_payload = {
     "method": "notifications/initialized"
 }
 
-# === Utility: Clean Ollama output ===
 def clean_ollama_output(raw: str) -> str:
     """Strip <think> blocks and whitespace from model output."""
     return re.sub(r"<think>.*?</think>", "", raw, flags=re.S).strip()
 
-
-# === Defensive parser for MCP arguments ===
 def normalize_arguments(args):
     """
+    Defensive parser for MCP arguments
     Ensure arguments are always a dict of values (per OpenAI tool spec).
     If model echoes a schema, convert required keys to placeholders.
     """
@@ -70,7 +72,7 @@ def normalize_arguments(args):
         logger.warning(f"Unexpected arguments format: {args}")
         return {}
 
-async def call_mcp(server_url: str, tool_call: dict):
+async def call_mcp(server_url: str, tool_call: dict, headers: Dict[str, str]):
     """
     Call the FastMCP server tool with sanitized arguments.
     """
@@ -113,7 +115,7 @@ async def call_mcp(server_url: str, tool_call: dict):
             answer_data = json.loads(text)
             return answer_data
 
-async def fetch_mcp_tools(server_url: str) -> list:
+async def fetch_mcp_tools(server_url: str, headers: Dict[str, str]) -> list:
     """
     Fetch available tool schemas (inputs + returns) from MCP server manifest.
     """
@@ -161,12 +163,4 @@ async def chat_with_ollama(conversation: list, model: str) -> str:
     ollama_out_clean = clean_ollama_output(ollama_out)
 
     return ollama_out_clean
-
-# Initialize RAG Engine
-rag_engine = RAGEngine(
-            collection_name=os.environ.get('COLLECTION_NAME', 'network_analysis'),
-            embedding_model=os.environ.get('EMBEDDING_MODEL', 'all-MiniLM-L6-v2'),
-            ollama_model=os.environ.get('OLLAMA_MODEL', 'qwen2.5:7b'),
-            mcp_server_url=os.environ.get('MCP_SERVER_URL')
-        )
 

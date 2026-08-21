@@ -215,7 +215,7 @@ async def chat():
 
     logger.info(response_payload)
 
-    return jsonify(response_payload)
+    return jsonify(response_payload), 200
 
 @app.route('/v1/stats', methods=['GET'])
 async def get_stats():
@@ -250,6 +250,7 @@ async def ingest_tool_output():
     raw_output = data.get('output')
     metadata = data.get('metadata', {})
     prb_id = metadata.get('prb_id')
+    doc_id = data.get('doc_id')
         
     if not tool_type or not parsed_output:
         return jsonify(), 400
@@ -258,9 +259,7 @@ async def ingest_tool_output():
         metadata['timestamp'] = datetime.now(timezone.utc).isoformat()
         
     metadata['tool_type'] = tool_type
-        
-    doc_id = f"prbtool:{prb_id}:{tool_type}:{metadata.get('timestamp')}:{str(uuid.uuid4())}"
-        
+                
     content = f"Tool: {tool_type}\n"
     content += f"Timestamp: {metadata.get('timestamp')}\n"
     content += f"Probe: {metadata.get('prb_id', 'N/A')}\n"
@@ -323,15 +322,13 @@ async def ingest_batch():
         metadata = doc.get('metadata')
         prb_id = metadata.get('prb_id')
         content = doc.get('content')
-            
+        doc_id = doc.get('doc_id')    
         if not tool_type or not output:
             continue
             
         if 'timestamp' not in metadata:
             metadata['timestamp'] = datetime.now(timezone.utc).isoformat()
-            
-        doc_id = f"prbtool:{prb_id}:{tool_type}:{metadata.get('timestamp')}:{str(uuid.uuid4())}"
-            
+                        
         processed_docs.append({
                 'id': doc_id,
                 'content': content,
@@ -410,9 +407,10 @@ async def analyze_batch():
     batch_content = data.get('content')
     metadata = data.get('metadata')
     available_tools = data.get('available_tools')
-    if not batch_content or not metadata or not available_tools:
+    detect_type = data.get('detect_type')
+    if not batch_content or not metadata or not available_tools or not detect_type:
         return jsonify(), 400
-    action_decision = await rag_engine.batch_content_processing(content=batch_content, metadata=json.loads(metadata), available_tools=available_tools)
+    action_decision = await rag_engine.batch_content_processing(content=batch_content, metadata=json.loads(metadata), available_tools=available_tools, detect_type=detect_type)
     return jsonify(action_decision), 200
     
 @app.route('/v1/history', methods=['GET'])

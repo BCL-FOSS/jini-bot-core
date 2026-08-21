@@ -126,7 +126,8 @@ class RAGEngine:
         self,
         query_text: str,
         n_results: int = 5,
-        where_filter: Optional[Dict] = None
+        where_filter: Optional[Dict] = None,
+        where_doc_filter: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         Query for similar network patterns
@@ -144,7 +145,8 @@ class RAGEngine:
         results = await self.collection.query(
             query_embeddings=[query_embedding],
             n_results=n_results,
-            where=where_filter
+            where=where_filter,
+            where_document=where_doc_filter
         )
 
         if not results:
@@ -193,7 +195,8 @@ class RAGEngine:
         self,
         query: str,
         n_results: int = 3,
-        where_filter: Optional[Dict] = None
+        where_filter: Optional[Dict] = None,
+        where_doc_filter: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         Full RAG query: retrieve similar docs and analyze with LLM
@@ -207,7 +210,7 @@ class RAGEngine:
             Dict with retrieved docs and LLM analysis
         """
         # Retrieve similar documents
-        similar_results = await self.query_similar(query, n_results, where_filter)
+        similar_results = await self.query_similar(query, n_results, where_filter, where_doc_filter=where_doc_filter)
         
         if not similar_results.get('results') or not similar_results['results']['documents']:
             return {
@@ -243,7 +246,9 @@ class RAGEngine:
     async def detect_anomalies(
         self,
         content: str,
-        metadata: Dict[str, Any]
+        metadata: Dict[str, Any],
+        detect_type: int,
+        available_tools: str = None
     ) -> Dict[str, Any]:
         
         similar = await self.query_similar(
@@ -257,6 +262,7 @@ class RAGEngine:
             historical_context = "\n---\n".join(historical_docs)
         else:
             historical_context = "No historical data available."
+
         
         # LLM analysis for anomaly detection
         anomaly_prompt = f"""Analyze the following {metadata.get('flow')} automation workflow network tools output for anomalies, security issues, 
@@ -274,8 +280,14 @@ class RAGEngine:
         3. Configuration problems
         4. Anomalies compared to historical patterns
         5. Severity level (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+        \n
+        """
 
-        Provide your analysis in JSON format with keys: severity, anomalies (list), recommendations (list)"""
+        if detect_type == 0:
+            anomaly_prompt+= "Provide your analysis in JSON format with keys: severity, anomalies (list), recommendations (list)"
+
+        if detect_type == 1:
+            anomaly_prompt+= f"Provide your analysis in text format identifying all anomalies identified and recommendations using the following available tools. Format this response in the form of a report (with proper headers, labels etc.): \n{available_tools}"
         
         analysis = await self.analyze_with_llm(historical_context, anomaly_prompt)
         
@@ -367,10 +379,13 @@ class RAGEngine:
         
         return decision_data
     
-    async def batch_content_processing(self, content: str,  metadata: Dict[str, Any], available_tools: str = None):
-        anomaly_result = await self.detect_anomalies(content, metadata)                
-        action_decision = await self.decide_action(anomaly_result, available_tools)
-        return action_decision
+    async def batch_content_processing(self, content: str,  metadata: Dict[str, Any], available_tools: str = None, detect_type: int = 1):
+        anomaly_result = await self.detect_anomalies(content=content, metadata=metadata, available_tools=available_tools, detect_type=detect_type) 
+        if detect_type == 0:               
+            action_decision = await self.decide_action(anomaly_result, available_tools)
+            return action_decision
+
+        return anomaly_result
 
     async def execute(self, action_decision: Dict[str, Any], auto_execute: bool = False):
         execution_results = []

@@ -4,7 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, REQUIRED_OUT_OF_SCOPE_MSG, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, comm_mgr
+from init_app import app, logger, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, comm_mgr
 from quart_rate_limiter import rate_exempt
 import os
 from quart import (websocket, abort, jsonify)
@@ -23,6 +23,7 @@ auth_ping_counter = {}
 auth_attempts={}
 connected_probes={}   
 NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = None 
+email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
 
 async def ip_blocker(conn_obj: Request | Websocket, auto_ban: bool = False, check_if_allowed: bool = False):
     global auth_attempts
@@ -96,150 +97,10 @@ async def jwt_verification(request: Request | Websocket, type: str = 'usr', api_
         return InvalidTokenError()
     except Exception:
         return jsonify("Error, occurred"), 400
-        
-async def _receive_telegram_bot() -> None:
-    while True:
-        message = await websocket.receive()
-        logger.debug(message)
-        message = json.loads(message)
-        is_authorized = await util_obj.check_id(message.get('telegram_id'))
-
-        if is_authorized is False:
-            logger.warning(f"Unauthorized Telegram ID {message.get('telegram_id')} attempted to connect to bot websocket.")
-            return
-
-        action=message['act']
-        if action:
-            match action:
-                case 'query':
-                    payload = {
-                        "query": message['prompt'],
-                        "n_results": 5,
-                        "filter": {"tool_type": message['tool_filter'] if message['tool_filter'] else "all"},
-                        "prb_id": message['prb_id'] if message['prb_id'] else None
-                    }
-                    status, response = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/query", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-
-                case 'exec':
-                    final_output = ""
-                    prompt, prb_id = await run_sync(lambda: util_obj.split_text_by_keyword(str(message["prompt"]).lower(), keyword="prb_id:", cnfrm=True))()
-
-                    if prb_id is None:
-                        await bot_broker.publish(message="Probe ID not specified. Please specify the probe ID by including 'prb_id:<ID>' at the end of your request.")
-
-                    if await cl_data_db.get_all_data(match=f'*{prb_id}*', cnfrm=True) is True:
-                        selected_probe = await cl_data_db.get_all_data(match=f'*{prb_id}*')
-                        selected_probe_dict = next(iter(selected_probe.values()))
-
-                        agent_msg_data = {}
-                        
-                        api = selected_probe_dict.get('prb_api_key')
-
-                        tool_request, analysis_request = await run_sync(lambda: util_obj.split_text_by_keyword(prompt, keyword="analysis:"))()
-
-                        logger.info(f'Tool request: {tool_request}, Analysis request: {analysis_request}')
-                        saved_tools_instructions = ""
-
-                        if connected_probes.get(prb_id)['tool_instructions'] is not None:
-                            saved_tools_instructions = connected_probes.get(prb_id).get('tool_instructions')
-
-                        payload = {
-                                'model': os.getenv('OLLAMA_MODEL'),
-                                'tools':[
-                                        {
-                                            "type": "mcp",
-                                            "server_label": "netadmin_mcp_server",
-                                            "server_url": str(selected_probe_dict.get('url')),
-                                            "require_approval": "never",
-                                        },
-                                    ],
-                                'usr_input':f"{tool_request}",
-                                'instructions': NET_ADMIN_INSTRUCTIONS,
-                                'api_key': api,
-                                'chat_id': message['telegram_id'],
-                            }
-                        
-                        status, tool_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/chat", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-
-                        if status is True:
-                            if saved_tools_instructions == "":
-                                connected_probes.get(prb_id)['tool_instructions'] = tool_resp['tool_instructions']
-
-                            if tool_resp['output_text'] == REQUIRED_OUT_OF_SCOPE_MSG:
-                                err_msg_data = {
-                                    "from": "agent",
-                                    "msg": REQUIRED_OUT_OF_SCOPE_MSG,
-                                    "url": selected_probe_dict.get('url'),
-                                    "usr_id": message['usr_id']
-                                }
-                                await bot_broker.publish(message=json.dumps(err_msg_data))
-                            else:
-                                output_message = ""
-                                logger.info(f"Request result: {tool_resp['output_text']}\n")
-                                logger.info(type(tool_resp['output_text']))
-
-                                data = json.loads(tool_resp['output_text'])
-
-                                for item in data:
-                                    net_cmd_output = item['output'][1]
-                                    logger.info(f"Net command output: {net_cmd_output}")
-                                    decoded_output = net_cmd_output.encode('utf-8').decode('unicode_escape')
-                                    lines = decoded_output.split('\n')
-
-                                    for i, line in enumerate(lines):
-                                        net_cmd_data = f'{line}\n'
-                                        output_message+=net_cmd_data
-
-                                if analysis_request != "":
-                                    analysis_msg = (
-                                        f"{output_message}"
-                                        + "\n\n"
-                                        f"{analysis_request}"
-                                        )
-                                    
-                                    analysis_instructions = (
-                                        NET_ADMIN_INSTRUCTIONS
-                                        + "\n\n"
-                                        + ANALYSIS_INSTRUCTIONS
-                                        + "\n\n"
-                                        + NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
-                                    )
-
-                                    payload['usr_input'] = analysis_msg
-                                    payload['instructions'] = analysis_instructions
-                                    analysis_payload = payload.copy()
-                                    if connected_probes.get(prb_id).get('tool_instructions') != "":
-                                        analysis_payload['tool_instructions'] = connected_probes.get(prb_id).get('tool_instructions')
-
-                                    analysis_status, analysis_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/chat", data=analysis_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))   
-
-                                    if analysis_status is True:
-                                        final_output+=f'{output_message}\n\n'
-                                        final_output+=analysis_resp['output_text']
-                                        logger.info(final_output)
-                                        agent_msg_data['query_type'] = 'tool_analysis'
-                                else:
-                                    final_output = output_message
-                                    agent_msg_data['query_type'] = 'tool'      
-                                    
-                                time_stamp = datetime.now(timezone.utc).isoformat()
-                                chat_data_id = f"chat:{prb_id}:{message['telegram_id']}:{time_stamp}"
-                                chat_data = {'id': chat_data_id,
-                                            'usr_msg': message["msg"],
-                                            'agent_msg': final_output,
-                                            'prb_id': prb_id,
-                                            'timestamp': time_stamp,
-                                            'type': agent_msg_data['query_type'],
-                                            'tool_calls': tool_resp['tool_calls'],
-                                            'tool_outputs': tool_resp['tool_outputs'],
-                                            }
-                                if await cl_data_db.upload_db_data(id=chat_data_id, data=chat_data) > 0:
-                                    logger.info(f"Chat data uploaded successfully with id: {chat_data_id}")
-                                
-                                await bot_broker.publish(message=final_output)
 
 async def _receive_probe() -> None:
     while True:
+        global connected_probes
         message = await websocket.receive()
         logger.debug(message)
         message = json.loads(message)
@@ -255,53 +116,16 @@ async def _receive_probe() -> None:
                         exp = entry.get('exp')
                         if exp and now <= exp:
                             new_exp = util_obj.round_up_to_30sec(now + timedelta(seconds=30))
-                            entry['exp'] = new_exp
-                            connected_probes[message["sess_id"]] = entry
+                            #entry['exp'] = new_exp
+                            connected_probes[message["sess_id"]]['exp'] = new_exp
                             logger.debug(f"Refreshed ping expiry for session {message['sess_id']} to {new_exp}")
                     else:
                         pass
-                case "tsk":  
-                    logger.info(f"Received probe task confirmation message: {message}.")
-                    match message.get('storage_opt'):
-                        case 'new':
-                            message['timestamp'] = datetime.now(tz=timezone.utc).isoformat()
-                            task_id = f"task:obj:{message['job_type']}:{message['prb_id']}:{message['timestamp']}"
-                            message['id'] = task_id
-                            if await cl_data_db.upload_db_data(id=task_id, data=message) > 0:
-                                logger.info(f"Task data uploaded successfully with id: {task_id}")
-                        case 'updt':
-                            if await cl_data_db.upload_db_data(id=message['id'], data=message) > 0:
-                                logger.info(f"Task data updated successfully with id: {message['id']}")
-                        case 'del':
-                            result = await cl_data_db.del_obj(key=message['id'])
-                            if result is not None:
-                                logger.info(f"Task data deleted successfully with id: {message['id']}")
-                    message.pop('act')
-                    message.pop('storage_opt')
-                    message['alert_type'] = 'task_config_confirmation'
-                    message['msg'] = f"Task '{message['job_type']}' was configured at probe '{message['prb_id']}' with output: {message['task_output']}"
-
-                    await broker.publish(message=json.dumps(message))
-                case "smtbt":
-                    if isinstance(message, list):
-                        payload = {'documents': message}
-                    else:
-                        payload = message 
-                    status, ingested_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/process", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-
-                    if status is True: 
-                        if await cl_data_db.upload_db_data(id=ingested_data.get('db_id'), data=ingested_data.get('data')) > 0:
-                            logger.info(f"SmartBot message data uploaded successfully with id: {ingested_data.get('db_id')}")
-
-                        logger.info("SmartBot message ingested successfully.")
-
-                        #await broker.publish(message=json.dumps(ingested_data.get('data')))
-                        await connected_probes[message['prb_id']]['broker'].publish(message=json.dumps(ingested_data.get('data')))
-
                 case _:
                     pass
         else:
             pass
+            
 
 async def _receive_user() -> None:
     while True:
@@ -314,10 +138,8 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
     logger.info(f"Starting session watchdog for {sess_id}")
     while True:
         try:
-            PROBE = False
             if connected_probes.get(sess_id):
                 entry = connected_probes.get(sess_id)
-                PROBE = True
 
             now = datetime.now(tz=timezone.utc)
 
@@ -332,45 +154,30 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                 await asyncio.sleep(check_interval)
                 continue
 
-            if PROBE is True:
-                now_quant = util_obj.round_down_to_30sec(now)
-                exp_quant = util_obj.round_up_to_30sec(exp)
+           
+            now_quant = util_obj.round_down_to_30sec(now)
+            exp_quant = util_obj.round_up_to_30sec(exp)
 
             #logger.debug(f"Session {sess_id} now_quant={now_quant} exp_quant={exp_quant} (raw now={now} raw exp={exp})")
 
             # Expiration occurred
             if now_quant > exp_quant:
-                logger.info(f"Session {sess_id} expired at {exp_quant} (now_quant={now_quant}), logging out and closing ws")
+                logger.info(f"Session {sess_id} expired at {exp_quant} (now_quant={now_quant})")
+                if connected_probes['sess_id']['status'] == 'offline':
+                    continue
+
+                if connected_probes['sess_id']['status'] == 'online':
+                    connected_probes['sess_id']['status'] = 'offline'
+                    connected_probes['sess_id']['badge'] = 'failure'
+
+                    alert={'alert': 'outage'}
+
+                    await Broker(connected_probes['sess_id']['broker']).publish(message=json.dumps(alert))
+
+                    prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
+                    prim_contact_dict = next(iter(prim_contact.values()))
                     
-                if PROBE is True:
-                    logger.info(f'Probe {sess_id} is either offline or a network outage has occurred.')
-                    connected_probes.pop(sess_id)
-                    probe_data = await cl_data_db.get_all_data(match=f"*{sess_id}*")
-                    probe_data_dict = next(iter(probe_data.values()))
-
-                    await cl_data_db.connect_db()
-
-                    await cl_data_db.upload_db_data(id=probe_data_dict.get('db_id'), data={'status': 'offline',
-                                                                                          'badge': 'danger',
-                                                                                          'last_online': now.isoformat()})
-
-                    probe_outage_data = {'alert_type': 'outage',
-                                            'site': probe_data_dict.get('site'),
-                                            'name': probe_data_dict.get('name'),
-                                            'prb_id': sess_id,
-                                            'status': 'offline',
-                                            'timestamp': now.isoformat()}
-                    
-                    alert_id = f"alert:{sess_id}:{probe_outage_data['alert_type']}:{now.isoformat()}"
-
-                    probe_outage_data['id'] = alert_id
-                    
-                    if await cl_data_db.upload_db_data(id=alert_id, data=probe_outage_data) > 0:
-                        logger.info(f"Probe outage alert data uploaded successfully with id: {alert_id}")
-
-                    await broker.publish(message=json.dumps(probe_outage_data))
-                    return None
-
+            
             else:
                 # Not yet expired: sleep until the sooner of check_interval or time to expiry (based on quantized values)
                 seconds_to_expiry = (exp_quant - now_quant).total_seconds()
@@ -409,22 +216,9 @@ async def check_ip_ws():
         except RuntimeError:
             return None
 
-@app.websocket("/v1/api/core/bot/ws")
+@app.websocket("/v1/api/core/channels/probe/heartbeat/<string:probe_id>/<int:connect_type>")
 @rate_exempt
-async def bot_ws():
-    try:
-        await websocket.accept()
-        asyncio.ensure_future(_receive_telegram_bot())
-        async for message in bot_broker.subscribe():
-            await websocket.send(message)
-    except Exception as e:
-        logger.error(f"Error in bot_ws: {e}")
-    except asyncio.CancelledError:
-        logger.info("bot_ws cancelled")
-
-@app.websocket("/v1/api/core/channels/probe/heartbeat/<string:probe_id>")
-@rate_exempt
-async def heartbeat(probe_id):
+async def heartbeat(probe_id, connect_type):
     global connected_probes
     
     try:
@@ -447,35 +241,39 @@ async def heartbeat(probe_id):
             await websocket.close()
 
         monitor_task = None
-        if probe_id and (probe_id not in connected_probes):
-            if usr_sess_id is not None:
-                await websocket.close()
-            now = datetime.now(tz=timezone.utc)
-            connected_probes[probe_id] = {'conn_start': now,
+        if connect_type == 0:
+            if probe_id and (probe_id not in connected_probes):
+                if usr_sess_id is not None:
+                    await websocket.close()
+                now = datetime.now(tz=timezone.utc)
+                connected_probes[probe_id] = {'conn_start': now,
                                         'id': probe_id,
-                                        "exp": util_obj.round_up_to_30sec(now + timedelta(seconds=30)),
-                                        "broker" : Broker(),
+                                        'exp': util_obj.round_up_to_30sec(now + timedelta(seconds=30)),
+                                        'broker': Broker(),
+                                        'status': 'online',
+                                        'badge': 'success',
+                                        'last_online': now.isoformat()
                                         }
-            logger.debug(f"Initialized ping expiry for session {probe_id} -> {connected_probes[probe_id]['exp']}")
-            asyncio.ensure_future(_receive_probe())
-            monitor_task = asyncio.create_task(session_watchdog(sess_id=probe_id))
-            current_probe_data = await cl_data_db.get_all_data(match=f"*{probe_id}*")
-            current_probe_data_dict = next(iter(current_probe_data.values()))
-            online_status = {'status': 'online',
-                             'badge': 'success',
-                             'last_online': now.isoformat()}
-            await cl_data_db.upload_db_data(id=current_probe_data_dict.get('db_id'), data=online_status)
-
-        if probe_id and (probe_id in connected_probes):
-            if usr_sess_id is not None:
-                asyncio.ensure_future(_receive_probe())
-            else:
+                logger.debug(f"Initialized ping expiry for session {probe_id} -> {connected_probes[probe_id]['exp']}")
                 asyncio.ensure_future(_receive_probe())
                 monitor_task = asyncio.create_task(session_watchdog(sess_id=probe_id))
+
+            if probe_id and (probe_id in connected_probes):
+                if connected_probes[probe_id]['status'] == 'offline':
+                    now = datetime.now(tz=timezone.utc)
+                    connected_probes[probe_id]['status'] = 'online'
+                    connected_probes[probe_id]['badge'] = 'success'
+                    connected_probes[probe_id]['last_online'] = now.isoformat()
+                    connected_probes[probe_id]['exp'] = util_obj.round_up_to_30sec(now + timedelta(seconds=30))
+                asyncio.ensure_future(_receive_probe())
+                monitor_task = asyncio.create_task(session_watchdog(sess_id=probe_id))
+
+        if probe_id and (probe_id in connected_probes) and connect_type == 1:
+            asyncio.ensure_future(_receive_probe())
         await websocket.accept()
 
         try:
-            async for message in  connected_probes[probe_id]['broker'].subscribe():
+            async for message in  Broker(connected_probes[probe_id]['broker']).subscribe():
                 await websocket.send(message)
         except asyncio.CancelledError:
             logger.debug("Subscribe loop cancelled (client disconnected)")

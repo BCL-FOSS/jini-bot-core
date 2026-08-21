@@ -138,19 +138,16 @@ class RemoteFlowRunner:
                             }
                 task_resp, task_resp_json = await util_obj.make_http_request(**task_data)
                 if task_resp == 200:
-                    probe__document = json.loads(task_resp_json['output'])
-                    all_probes_documents.append(list(probe__document).copy())
+                    probe_document = json.loads(task_resp_json['output'])
+                    all_probes_documents.append(list(probe_document).copy())
                     all_probes_content+=f"{task_resp_json['anlys_output']}\n"
                                                 
             ingest_payload = {'documents': json.dumps(all_probes_documents)}
-            analysis_payload = {'content': all_probes_content}
-            ingest_url = f"{os.getenv('OLLAMA_PROXY_URL')}/v1/ingest/batch"
-            analysis_url = f"{os.getenv('OLLAMA_PROXY_URL')}/v1/analyze/batch"
+            ingest_url = f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch"
             ingest_resp, ingest_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=ingest_url, data=ingest_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
             if ingest_resp == 200:
-                analysis_resp, analysis_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=analysis_url, data=analysis_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-                
-
+                return
+            
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run network automation workflows.")
     parser.add_argument(

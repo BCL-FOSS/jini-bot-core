@@ -30,6 +30,7 @@ class RedisDB:
     
 
     async def upload_db_data(self, id = '', data = {}):
+        await self.connect_db()
         try: 
             str_hashmap = {str(k): str(v) for k, v in data.items()}
             result = await self.redis_conn.hset(id, mapping=str_hashmap)
@@ -44,6 +45,7 @@ class RedisDB:
             await self.redis_conn.close()
 
     async def get_all_data(self, match='*', cnfrm=False):
+        await self.connect_db()
         try:
             all_data = {}
             cursor = b'0'  # Start the SCAN with cursor 0
@@ -75,6 +77,7 @@ class RedisDB:
            
         
     async def get_obj_data(self, key=''):
+        await self.connect_db()
         try:
             probe = await self.redis_conn.hgetall(key)
 
@@ -89,6 +92,7 @@ class RedisDB:
             await self.redis_conn.close()
 
     async def del_obj(self, key=''):
+        await self.connect_db()
         try:
             probe = await self.redis_conn.delete(key)
 

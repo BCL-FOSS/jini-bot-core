@@ -15,6 +15,11 @@ from onetimesecret import OneTimeSecretCli
 from utils.CommMgr import CommMgr
 import uuid
 import bcrypt
+from accounts.Client import Client
+from accounts.Admin import Admin
+from werkzeug.local import LocalProxy
+from quart_auth import (
+    QuartAuth)
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('passlib').setLevel(logging.ERROR)
@@ -23,7 +28,49 @@ app = Quart(__name__)
 app.config.from_object("config")
 app.config['SECRET_KEY'] = secrets.token_urlsafe()
 app.config['SECURITY_PASSWORD_SALT'] = str(secrets.SystemRandom().getrandbits(128))
-nest_asyncio.apply()
+
+# Authentication salts for user & admin accounts
+auth_salts = {
+    "client": str(secrets.SystemRandom().getrandbits(128)),
+    "admin": str(secrets.SystemRandom().getrandbits(128)),
+}
+
+# Authentication configs for user & admin accounts
+auth_configs = {
+    "client": {
+        "attribute_name": "client",
+        "cookie_name": "CLIENT",
+        "salt": auth_salts["client"],
+    },
+    "admin": {
+        "attribute_name": "admin",
+        "cookie_name": "ADMIN",
+        "salt": auth_salts["admin"],
+    },
+}
+
+# Create Quart-Auth user and admin account types
+for key, config in auth_configs.items():
+    if key == "admin":
+        admin_auth = QuartAuth(
+            app,
+            salt=config["salt"],
+            singleton=False,
+        )
+        admin_auth.user_class=Admin
+
+    if key == "client":
+        client_auth = QuartAuth(
+            app,
+            salt=config["salt"],
+            singleton=False,
+        )
+        client_auth.user_class=Client
+
+# Generate current client & admin variables for umjiniti authentication control
+current_client = LocalProxy(lambda: client_auth.load_user())
+current_admin = LocalProxy(lambda: admin_auth.load_user())
+
 RateLimiter(
     app,
     default_limits=[
@@ -48,7 +95,9 @@ ip_ban_db = RedisDB(hostname=os.getenv('IP_BAN_DB'),
 ws_rate_limiter = WSRateLimiter(redis_host=os.getenv('RATE_LIMIT_DB'), 
                                 redis_port=os.getenv('RATE_LIMIT_DB_PORT'))
 comm_mgr = CommMgr()
-probe_url="/v1/api/core/probes"
+
+main_url="/v1/api/core"
+probe_url=f"{main_url}/probes"
 REQUIRED_OUT_OF_SCOPE_MSG = "Please provide a question or request related to network administration or the available MCP tools."
 NET_ADMIN_INSTRUCTIONS = (
                             "You are a Network Admin assistant with knowledge of "
@@ -66,6 +115,7 @@ ANALYSIS_INSTRUCTIONS = (
     "Your primary task is to analyze the outputs of traceroutes, iperf speedtests, nmap network scans, SNMP statistics and network packet captures from tcpdump and tshark (cli version of wireshark) to identify, diagnose, troubleshoot and resolve network performance issues, outages and anomalies within current and historical network data. You will provide suggestions for network performance improvements only based on the specifications provided from the user prompt. If you are asked just to conduct an analysis always put 'SmartBot-Analysis:' before your response. If you are asked to remediate any issues found dring your analysis, use any of the applicable tools provided by the MCP servers. If the available tools are insufficient to perform remediation, reply with a detailed report of your findings, the steps you'd take to resolve any issues identified and what exact tools (command line network utilities, firewall/switch configurations etc.) and exact network command line tool commands you would use during the remediation process. Put 'SmartBot-Remediation: ' before your response. If you are asked to analyze if specific data within the network commandline utilities outputs meet certain criteria or KPI metrics specified by the user, put 'SmartBot-Alert:' before your response.\n")
 cwd = os.getcwd()
 utility_scripts_path = os.path.join(cwd, 'ai', 'utils', 'jini-utils')
+nest_asyncio.apply()
 
 async def check_for_utils():
     # Check if jini utility scripts have been downloaded. If not, clones from github.
@@ -158,3 +208,4 @@ async def init_core_api():
             return
     else:
         pass
+

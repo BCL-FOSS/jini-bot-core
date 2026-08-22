@@ -4,7 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, comm_mgr, probe_url, init_core_api
+from init_app import app, logger, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, comm_mgr, probe_url, init_core_api, main_url, current_admin, current_client, client_auth, admin_auth, Client
 from quart_rate_limiter import rate_exempt
 import os
 from quart import (websocket, abort, jsonify)
@@ -16,6 +16,11 @@ from quart_auth import Unauthorized
 from datetime import datetime, timedelta, timezone
 import uuid
 import secrets
+from quart_auth import (
+    Action
+)
+from quart_auth import Unauthorized
+from functools import wraps
 
 broker = Broker()
 bot_broker = Broker()
@@ -24,6 +29,19 @@ auth_attempts={}
 connected_probes={}   
 NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = None 
 email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
+
+async def retrieve_user_sess_data(sess_id):
+    cl_sess_data = await cl_sess_db.get_all_data(match=f"{sess_id}")
+    cl_sess_data_dict = next(iter(cl_sess_data.values()))
+    logger.info(cl_sess_data_dict)
+    data = {'unm': cl_sess_data_dict.get('unm'),
+            'id': cl_sess_data_dict.get('db_id'),
+            'fnm': cl_sess_data_dict.get('fname'),
+            'lnm': cl_sess_data_dict.get('lname'),
+            'eml': cl_sess_data_dict.get('eml'),
+            'sess_id': sess_id,
+            'auth_token': cl_sess_data_dict.get('auth_token')}
+    return data
 
 async def ip_blocker(conn_obj: Request | Websocket, auto_ban: bool = False, check_if_allowed: bool = False):
     global auth_attempts
@@ -54,11 +72,36 @@ async def ip_blocker(conn_obj: Request | Websocket, auto_ban: bool = False, chec
         if await ip_ban_db.upload_db_data(id=f"blocked_ip:{conn_obj.access_route[-1]}", data=ban_data) > 0:
             logger.warning(f"Max authentication attempts reached for {conn_obj.access_route[-1]}. Blocking further attempts.")
             auth_attempts.pop(conn_obj.access_route[-1], None)
-    
+
+def user_login_required(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        auth_id = current_client.auth_id
+        auth_header = request.headers.get("Authorization")
+
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Missing or invalid authorization header"}), 401
+
+        token = auth_header.split(" ")[1]
+
+        if auth_id is None or auth_id.strip() == "" or await cl_sess_db.get_all_data(match=f"{auth_id}", cnfrm=True) is False or token is None or token.strip() == "".strip():
+            await ip_blocker()
+            return Unauthorized()
+
+        sess_data = await retrieve_user_sess_data(sess_id=auth_id)
+
+        if bcrypt.checkpw(password=token, hashed_password=sess_data.get('auth_token')):
+            await ip_blocker()
+            return Unauthorized()
+            
+        return await app.ensure_async(func)(*args, **kwargs)
+    return wrapper
+
 async def jwt_verification(request: Request | Websocket, type: str = 'usr', api_key: str = None, sess_id: str = None, jwt_token: str = None):
     try:
         match type:
             case 'prb':
+                auth_check = False
                 api_data = await cl_data_db.get_all_data(match=f"{api_name}:dta:*")
                 if api_data is None:
                     await ip_blocker(conn_obj=request)
@@ -70,11 +113,16 @@ async def jwt_verification(request: Request | Websocket, type: str = 'usr', api_
                     if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand') or bcrypt.checkpw(api_key,api_data_dict.get(api_name)) is False:
                         await ip_blocker(conn_obj=request)
                         abort(401)
+                    else:
+                        auth_check = True
                 else:
                     if bcrypt.checkpw(api_key, api_data_dict.get(api_name)) is False:
                         await ip_blocker(conn_obj=request)
                         abort(401)
-                return api_data_dict
+                    else:
+                        auth_check = True
+
+                return api_data_dict, auth_check
             case 'usr':
                 if await cl_sess_db.get_all_data(match=f'*{sess_id}*', cnfrm=True) is False:
                     await ip_blocker(conn_obj=request)
@@ -125,14 +173,6 @@ async def _receive_probe() -> None:
                     pass
         else:
             pass
-            
-
-async def _receive_user() -> None:
-    while True:
-        message = await websocket.receive()
-        logger.debug(message)
-        message = json.loads(message)
-        await broker.publish(message=json.dumps(message))
 
 async def session_watchdog(sess_id: str, check_interval: float = 5.0):
     logger.info(f"Starting session watchdog for {sess_id}")
@@ -194,10 +234,6 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
 
 @app.before_serving
 async def startup():
-    await ip_ban_db.connect_db()
-    await cl_auth_db.connect_db()
-    await cl_sess_db.connect_db()
-    await cl_data_db.connect_db()
     global NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
     NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = await run_sync(load_network_diagnostic_prompt())    
     await check_for_utils()
@@ -294,77 +330,135 @@ async def heartbeat(probe_id, connect_type):
             except Exception as e:
                 logger.error(f"Error cancelling monitor task: {e}")
                 pass
-    
-@app.websocket("/v1/api/core/channels/users/ws")
-@rate_exempt
-async def ws():
-    global auth_ping_counter    
-    try:
-        if websocket.cookies.get("access_token") is not None:
-            id = None
-            if websocket.args.get('id') is not None:
-                id = websocket.args.get('id')
-            jwt_token = websocket.cookies.get("access_token")
-            if await ws_rate_limiter.check_rate_limit(client_id=jwt_token) is False:
-                await ip_blocker(conn_obj=websocket)
-                abort(401)
-            if id is not None:
-                await jwt_verification(sess_id=id, jwt_token=jwt_token, request=websocket, type='usr')           
-            logger.info(f'websocket authentication successful for session {id}')
-            await websocket.accept()
-            if id and (id not in auth_ping_counter):
-                now = datetime.now(tz=timezone.utc)
-                auth_ping_counter[id] = {
-                    "sess_id": id,
-                    "sign_in_time": now
-                }
-                logger.debug(f"user session {id} -> signed in at {auth_ping_counter[id]['sign_in_time ']}") 
-                asyncio.ensure_future(_receive_user())
-            if id and (id in auth_ping_counter):
-                asyncio.ensure_future(_receive_user())
-            try:
-                async for message in broker.subscribe():
-                    await websocket.send(message)
-            except asyncio.CancelledError:
-                logger.debug("Subscribe loop cancelled (client disconnected)")
-                pass
-            except Exception as e:
-                logger.exception("Error while reading from broker or sending websocket message")
-                pass
-        else:
-           await ip_blocker(conn_obj=websocket)
-           abort(401)
-    except Exception as e:
-        logger.error(e)
-    except asyncio.CancelledError as e:
-        logger.error(e)
-    except ExpiredSignatureError:
-        logger.warning("JWT expired, need to refresh token")
-        await ip_blocker(conn_obj=websocket)
-        logger.error(ExpiredSignatureError)
-    except InvalidTokenError as e:
-        logger.error(f"JWT invalid: {e}")
-        await ip_blocker(conn_obj=websocket)
-        logger.error(InvalidTokenError)
-    finally:
-        if id and id in auth_ping_counter:
-            auth_ping_counter.pop(id)
-            logger.debug(f"Session {id} removed from auth ping counter on disconnect")
 
+@app.route(f'{main_url}/register', methods=['POST'])
+async def register():
+    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
+    if not api_key:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    _, auth_check = await jwt_verification(request=request, type='prb', api_key=api_key)
+
+    if auth_check is True:
+        user_data = await request.get_json()
+        username = str(user_data['uname']).replace(" ", "").lower()
+        password_hash = bcrypt.hashpw(user_data['pass'], bcrypt.gensalt())
+        logger.info(f"Registering user: {username}")
+        user_nmp, user_id = util_obj.gen_user(username=username)
+        user_obj = {
+                "id": user_id,
+                "unm": username,
+                "pwd": password_hash,
+                "eml": user_data['eml'],
+                "telegram_id": user_data['telegram'],
+                "fname": user_data['fname'],
+                "lname": user_data['lname']
+            }
+        user_key = f"{user_nmp}:{user_id}"
+            
+        if await cl_auth_db.get_all_data(match="*pct:*", cnfrm=True) is False:
+                user_obj["db_id"] = f'pct:{user_key}'
+        else:
+                user_obj["db_id"] = user_key
+        
+        if await cl_auth_db.upload_db_data(id=user_obj['db_id'], data=user_obj) > 0:
+                logger.info(f"Registration successful for '{username}'.")
+                
+        
+                contact_data = {"LASTNAME": user_data['lname'],
+                                    "FIRSTNAME": user_data['fname'],
+                                    }
+                add_contact_params = {'email': user_data['eml'],
+                                'ext_id': user_obj['db_id'],
+                                'attributes': contact_data
+                            }
+                                        
+                add_contact_command = f"python3 {email_script_path} -t 'add' -p {add_contact_params}"
+                add_contact_code, add_contact_output, add_contact_error = await util_obj.run_shell_cmd(cmd=add_contact_command)
+                logger.info(f"code: {add_contact_code}\noutput: {add_contact_output}\nerror: {add_contact_error}")
+                return jsonify(), 200
+
+@app.route(f'{main_url}/login', methods=['POST'])
+async def login():
+    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
+    if not api_key:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    _, auth_check = await jwt_verification(request=request, type='prb', api_key=api_key)
+    
+    if auth_check is True:
+        auth_data = await request.get_json()
+        username = str(auth_data['uname'])
+        password = str(auth_data['pass'])
+    
+        username = username.replace(" ", "").lower()
+    
+        if await cl_auth_db.get_all_data(match=f'*uid:{username}*', cnfrm=True) is False:
+            await ip_blocker(conn_obj=request)
+            abort(401)
+    
+        account_data = await cl_auth_db.get_all_data(match=f'*uid:{username}*')    
+        sub_dict = next(iter(account_data.values()))       
+        password_hash = sub_dict.get('pwd')
+                    
+        if account_data and bcrypt.checkpw(password, password_hash) is False:
+            if request.access_route[-1] not in auth_ping_counter:
+                now = datetime.now(tz=timezone.utc)
+                auth_ping_counter[request.access_route[-1]] = {
+                    "ip": request.access_route[-1],
+                    "fail_count": 1,
+                    "timestamp": now
+                    }
+                return Unauthorized()
+        
+            if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] >= os.getenv('MAX_AUTH_ATTEMPTS'):
+                now = datetime.now(tz=timezone.utc)
+                auth_ping_counter[request.access_route[-1]]['timestamp']=now
+                await ip_blocker(conn_obj=request, auto_ban=True)
+                return Unauthorized()
+
+            if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] < os.getenv('MAX_AUTH_ATTEMPTS'):
+                now = datetime.now(tz=timezone.utc)
+                auth_ping_counter[request.access_route[-1]]['fail_count']+=1
+                auth_ping_counter[request.access_route[-1]]['timestamp']=now
+                return Unauthorized()
+                
+        logger.info(f'Account credentials verified for {username}')
+        # Assign session ID for authenticated account
+        session_id = util_obj.gen_id()    
+        client_auth.login_user(Client(auth_id=session_id, action=Action.WRITE))
+        sub_dict.pop('pwd')
+        auth_token = client_auth.dump_token(auth_id=session_id, app=app)
+        sub_dict['auth_token'] = bcrypt.hashpw(password=auth_token, salt=bcrypt.gensalt())
+        if await cl_sess_db.upload_db_data(id=session_id, data=sub_dict) > 0:
+            return jsonify({'token': auth_token})
+
+@app.route(f'{main_url}/logout/<string:auth_id>', methods=['GET'])
+@user_login_required
+async def logout(auth_id):
+    cur_usr_id = auth_id
+
+    if await cl_sess_db.get_all_data(match=f'{cur_usr_id}', cnfrm=True) is False:
+            await ip_blocker()
+            return Unauthorized()
+        
+    if await cl_sess_db.del_obj(key=cur_usr_id) is not None:
+        client_auth.logout_user()
+        return jsonify(), 200
+    
 @app.route(f'{probe_url}/init', methods=['GET'])
 async def prbinit():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
-    try:
-        if not api_key:
-            await ip_blocker(conn_obj=request)
-            abort(401)
-        api_data_dict = await jwt_verification(request=request, type='prb', api_key=api_key)
-        api_jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
-        api_rand = api_data_dict.get(f'{api_name}_rand')
-        api_id = api_data_dict.get(f'{api_name}_id')
-        jwt_token = util_obj.generate_ephemeral_token(id=api_id, secret_key=api_jwt_key, rand=api_rand, type='prb')
-        response = Response(response='Probe Token Success', status=200)  
-        response.set_cookie(
+    if not api_key:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    api_data_dict = await jwt_verification(request=request, type='prb', api_key=api_key)
+    api_jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
+    api_rand = api_data_dict.get(f'{api_name}_rand')
+    api_id = api_data_dict.get(f'{api_name}_id')
+    jwt_token = util_obj.generate_ephemeral_token(id=api_id, secret_key=api_jwt_key, rand=api_rand, type='prb')
+    response = Response(response='Probe Token Success', status=200)  
+    response.set_cookie(
             key='access_token',
             value=jwt_token,
             httponly=True,
@@ -372,9 +466,8 @@ async def prbinit():
             samesite="Strict",
             max_age=3600  # 1 hour, adjust as needed
         )
-        return response
-    except Exception():
-        return jsonify({'error': 'Error occurred'}), 400
+    return response
+  
     
 @app.route(f'{probe_url}/enroll', methods=['POST'])
 async def prbenroll():

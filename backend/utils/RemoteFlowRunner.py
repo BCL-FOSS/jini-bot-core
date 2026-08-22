@@ -140,7 +140,7 @@ class RemoteFlowRunner:
                 if task_resp == 200:
                     probe_document = json.loads(task_resp_json['output'])
                     all_probes_documents.append(list(probe_document).copy())
-                    all_probes_content+=f"{task_resp_json['anlys_output']}\n"
+                    all_probes_content+=f"{task_resp_json['anlys_output']}\n\n"
                                                 
             ingest_payload = {'documents': json.dumps(all_probes_documents)}
             ingest_url = f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch"

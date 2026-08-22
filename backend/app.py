@@ -4,7 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, comm_mgr
+from init_app import app, logger, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, comm_mgr, probe_url, init_core_api
 from quart_rate_limiter import rate_exempt
 import os
 from quart import (websocket, abort, jsonify)
@@ -198,10 +198,10 @@ async def startup():
     await cl_auth_db.connect_db()
     await cl_sess_db.connect_db()
     await cl_data_db.connect_db()
-    await check_for_utils()
     global NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
-    NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = await run_sync(load_network_diagnostic_prompt())
-    logger.info(f"Network diagnostic system prompt loaded successfully.\n {NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD[:500]}...")
+    NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = await run_sync(load_network_diagnostic_prompt())    
+    await check_for_utils()
+    await init_core_api()
     
 @app.before_request
 async def check_ip():
@@ -216,7 +216,7 @@ async def check_ip_ws():
         except RuntimeError:
             return None
 
-@app.websocket("/v1/api/core/channels/probe/heartbeat/<string:probe_id>/<int:connect_type>")
+@app.websocket(f"{probe_url}/channels/<string:probe_id>/<int:connect_type>")
 @rate_exempt
 async def heartbeat(probe_id, connect_type):
     global connected_probes
@@ -351,7 +351,7 @@ async def ws():
             auth_ping_counter.pop(id)
             logger.debug(f"Session {id} removed from auth ping counter on disconnect")
 
-@app.route('/v1/api/core/probe/init', methods=['GET'])
+@app.route(f'{probe_url}/init', methods=['GET'])
 async def prbinit():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     try:
@@ -376,7 +376,7 @@ async def prbinit():
     except Exception():
         return jsonify({'error': 'Error occurred'}), 400
     
-@app.route("/v1/api/core/probe/enroll", methods=['POST'])
+@app.route(f'{probe_url}/enroll', methods=['POST'])
 async def prbenroll():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     site = request.args.get('site')
@@ -388,13 +388,12 @@ async def prbenroll():
         site = 'default'
     await jwt_verification(jwt_token=jwt_token, request=request, api_key=api_key, type='prb')
     adopted_probe_data = await request.get_json()
-    adopted_probe_data['db_id'] = f"prb:{adopted_probe_data['site']}:{str(uuid.uuid4())}:{adopted_probe_data['prb_id']}"
-    if await cl_data_db.upload_db_data(id=adopted_probe_data['db_id'], data=adopted_probe_data) > 0:
+    if await cl_data_db.upload_db_data(id=adopted_probe_data['prb_id'], data=adopted_probe_data) > 0:
         return jsonify(), 200
     else:
         return jsonify(), 400
     
-@app.route('/v1/api/core/probes/delete', methods=['POST'])
+@app.route(f'{probe_url}/delete', methods=['POST'])
 async def prbdelete():
     jwt_token = request.cookies.get("access_token")
     sess_id = request.args.get('sess_id')   
@@ -409,7 +408,7 @@ async def prbdelete():
         return jsonify(), 400
     return jsonify(), 200
 
-@app.route('/v1/api/core/probes/ingest', methods=['POST'])
+@app.route(f'{probe_url}/ingest', methods=['POST'])
 async def prbingest():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     jwt_token = request.cookies.get("access_token")
@@ -421,13 +420,13 @@ async def prbingest():
     if data is None:
         return jsonify(), 400
     payload = {
-        'documents': data['output'],       
+        'documents': data['documents'],       
     }
-    chat_resp, chat_resp_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/v1/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+    chat_resp, chat_resp_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
     if chat_resp == 200:
         return jsonify(), 200
 
-@app.route("/v1/api/core/probes/analysis", methods=['POST'])
+@app.route(f'{probe_url}/analysis', methods=['POST'])
 async def prbanalysis():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     jwt_token = request.cookies.get('access_token')
@@ -456,27 +455,6 @@ async def prbanalysis():
     if chat_resp == 200:
         alerts = str(data['notif_list']).split(',')
         await comm_mgr.send_llm_response(alerts=alerts, flow_name=data['name'], prompt=data['prompt'], llm_resp=chat_resp_data, task_output=data['task_output'])
-        
-@app.route('/v1/api/core/user/alerts', methods=['POST'])
-async def alerts():
-    jwt_token = request.cookies.get("access_token")
-    sess_id = request.args.get('sess_id')   
-    if not jwt_token or not sess_id:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    await jwt_verification(sess_id=sess_id, jwt_token=jwt_token, request=request)
-    data = await request.get_json()
-    match data['action']:
-        case 'ack':
-            if await cl_data_db.upload_db_data(id=data['id'], data={'ack': 'seen'}) > 0:
-                return jsonify(), 200
-            else:
-                return jsonify(), 400
-        case 'rslv':
-            if await cl_data_db.upload_db_data(id=data['id'], data={'rslv': 'resolved'}) > 0:
-                return jsonify(), 200
-            else:
-                return jsonify(), 400
 
 @app.route('/v1/api/core/flows', defaults={'task': None}, methods=['POST'])            
 @app.route('/v1/api/core/flows/<string:task>', methods=['POST'])

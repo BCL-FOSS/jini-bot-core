@@ -13,6 +13,8 @@ from ai.utils.RedisDB import RedisDB
 from utils.WSRateLimiter import WSRateLimiter
 from onetimesecret import OneTimeSecretCli
 from utils.CommMgr import CommMgr
+import uuid
+import bcrypt
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('passlib').setLevel(logging.ERROR)
@@ -46,6 +48,7 @@ ip_ban_db = RedisDB(hostname=os.getenv('IP_BAN_DB'),
 ws_rate_limiter = WSRateLimiter(redis_host=os.getenv('RATE_LIMIT_DB'), 
                                 redis_port=os.getenv('RATE_LIMIT_DB_PORT'))
 comm_mgr = CommMgr()
+probe_url="/v1/api/core/probes"
 REQUIRED_OUT_OF_SCOPE_MSG = "Please provide a question or request related to network administration or the available MCP tools."
 NET_ADMIN_INSTRUCTIONS = (
                             "You are a Network Admin assistant with knowledge of "
@@ -134,3 +137,24 @@ def schedule_cronjob(job1: CronTab, core_act_data: dict):
                     job1.month.every(months_range[0])
                                     
     return job1
+
+async def init_core_api():
+    if await cl_data_db.get_all_data(match=f"*{api_name}*", cnfrm=True) is False:
+        api_id = util_obj.key_gen(size=10) 
+        new_api_key = str(uuid.uuid4())
+        updated_api_data = {
+            api_name: bcrypt.hashpw(new_api_key, bcrypt.gensalt()),
+            f"{api_name}_id": api_id,
+            f"{api_name}_rand": secrets.token_urlsafe(500),
+            f"{api_name}_jwt_secret": secrets.token_urlsafe(500)
+        }
+            
+        if await cl_data_db.upload_db_data(id=f"{api_name}:dta:{api_id}", data=updated_api_data) > 0:
+            logger.info(f"""ATTENTION: Your API Key for Jini Net Assistant is below. 
+                    Please copy and store in a password manager of your choice for safe keeping. This willl not be displayed again.\n
+        
+                    API KEY: {new_api_key}
+                    """)
+            return
+    else:
+        pass

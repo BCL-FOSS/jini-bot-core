@@ -84,10 +84,10 @@ dockersetup() {
   sudo docker volume create --name=caddy_data
   sudo docker volume create --name=caddy_config
   sudo docker volume create --name=ollama_models
-  sudo docker volume create --name=smartbot_data
+  sudo docker volume create --name=jini_data
+  sudo docker volume create --name=backend_data
   sudo docker volume create --name=ip_ban_data
   sudo docker-compose up
- 
 }
 
 sudo apt-get update -y

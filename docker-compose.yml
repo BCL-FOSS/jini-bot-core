@@ -5,6 +5,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     container_name: backend
+    volumes:
+      - backend_data:/home/quart
     environment:
       - CLIENT_AUTH_DB=${CLIENT_AUTH_DB}
       - CLIENT_AUTH_DB_PORT=${CLIENT_AUTH_DB_PORT}
@@ -35,27 +37,6 @@ services:
       - JIRA_CLOUD_ID=${JIRA_CLOUD_ID}
       - JIRA_AUTH_TOKEN=${JIRA_AUTH_TOKEN}
       - JIRA_AUTH_EMAIL=${JIRA_AUTH_EMAIL}
-    
-  frontend:
-    restart: always
-    build:
-      context: .
-      dockerfile: frontend/Dockerfile
-    container_name: frontend
-    environment:
-      - CLIENT_AUTH_DB=${CLIENT_AUTH_DB}
-      - CLIENT_AUTH_DB_PORT=${CLIENT_AUTH_DB_PORT}
-      - CLIENT_SESS_DB=${CLIENT_SESS_DB}
-      - CLIENT_SESS_DB_PORT=${CLIENT_SESS_DB_PORT}
-      - CLIENT_DATA_DB=${CLIENT_DATA_DB}
-      - CLIENT_DATA_DB_PORT=${CLIENT_DATA_DB_PORT}
-      - IP_BAN_DB=${IP_BAN_DB}
-      - IP_BAN_DB_PORT=${IP_BAN_DB_PORT}
-      - SERVER_NAME=${SERVER_NAME}
-      - REQUEST_TIMEOUT=${REQUEST_TIMEOUT}
-      - API_TOKEN_NAME=${API_TOKEN_NAME}
-      - MAX_AUTH_ATTEMPTS=${MAX_AUTH_ATTEMPTS}
-      - API_NAME=${API_NAME}
 
   jini:
     restart: always
@@ -64,7 +45,7 @@ services:
       dockerfile: backend/ai/Dockerfile
     container_name: jini
     volumes:
-      - smartbot_data:/home/quart
+      - jini_data:/home/quart
     environment:
       - CLIENT_DATA_DB=${CLIENT_DATA_DB}
       - CLIENT_DATA_DB_PORT=${CLIENT_DATA_DB_PORT}
@@ -137,7 +118,9 @@ services:
 volumes:
   ip_ban_data:
     external: true
-  smartbot_data:
+  jini_data:
+    external: true
+  backend_data:
     external: true
   ollama_models:
     external: true

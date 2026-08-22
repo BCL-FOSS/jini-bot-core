@@ -4,8 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, NET_ADMIN_INSTRUCTIONS, ANALYSIS_INSTRUCTIONS, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, comm_mgr, probe_url, init_core_api, main_url, current_admin, current_client, client_auth, admin_auth, Client
-from quart_rate_limiter import rate_exempt
+from init_app import app, logger, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, probe_url, init_core_api, main_url, current_client, client_auth, Client
 import os
 from quart import (websocket, abort, jsonify)
 import jwt
@@ -19,11 +18,9 @@ import secrets
 from quart_auth import (
     Action
 )
-from quart_auth import Unauthorized
 from functools import wraps
 
 broker = Broker()
-bot_broker = Broker()
 auth_ping_counter = {}
 auth_attempts={}
 connected_probes={}   
@@ -90,51 +87,41 @@ def user_login_required(func):
 
         sess_data = await retrieve_user_sess_data(sess_id=auth_id)
 
-        if bcrypt.checkpw(password=token, hashed_password=sess_data.get('auth_token')):
+        if bcrypt.checkpw(password=token, hashed_password=sess_data.get('auth_token')) is False:
             await ip_blocker()
             return Unauthorized()
             
         return await app.ensure_async(func)(*args, **kwargs)
     return wrapper
 
-async def jwt_verification(request: Request | Websocket, type: str = 'usr', api_key: str = None, sess_id: str = None, jwt_token: str = None):
+async def jwt_verification(request: Request | Websocket, api_key: str = None):
     try:
-        match type:
-            case 'prb':
-                auth_check = False
-                api_data = await cl_data_db.get_all_data(match=f"{api_name}:dta:*")
-                if api_data is None:
-                    await ip_blocker(conn_obj=request)
-                    abort(401)
-                api_data_dict = next(iter(api_data.values()))
-                if jwt_token:
-                    jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
-                    decoded_token = jwt.decode(jwt=jwt_token, key=jwt_key , algorithms=["HS256"])
-                    if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand') or bcrypt.checkpw(api_key,api_data_dict.get(api_name)) is False:
-                        await ip_blocker(conn_obj=request)
-                        abort(401)
-                    else:
-                        auth_check = True
-                else:
-                    if bcrypt.checkpw(api_key, api_data_dict.get(api_name)) is False:
-                        await ip_blocker(conn_obj=request)
-                        abort(401)
-                    else:
-                        auth_check = True
-
-                return api_data_dict, auth_check
-            case 'usr':
-                if await cl_sess_db.get_all_data(match=f'*{sess_id}*', cnfrm=True) is False:
-                    await ip_blocker(conn_obj=request)
-                    abort(401)
-                usr_sess_data = await cl_sess_db.get_all_data(match=f'*{sess_id}*')
-                usr_data_dict = next(iter(usr_sess_data.values()))
-                jwt_key = usr_data_dict.get(f'usr_jwt_secret')
-                decoded_token = jwt.decode(jwt=jwt_token, key=jwt_key , algorithms=["HS256"])
-                if decoded_token.get('rand') != usr_data_dict.get(f'usr_rand'):
-                    await ip_blocker(conn_obj=request)
-                    abort(401)
-                return usr_data_dict
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            await ip_blocker(conn_obj=request)
+            abort(401)
+        token = auth_header.split(" ")[1]
+        auth_check = False
+        api_data = await cl_data_db.get_all_data(match=f"{api_name}:dta:*")
+        if api_data is None:
+            await ip_blocker(conn_obj=request)
+            abort(401)
+        api_data_dict = next(iter(api_data.values()))
+        if token:
+            jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
+            decoded_token = jwt.decode(jwt=token, key=jwt_key , algorithms=["HS256"])
+            if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand') or bcrypt.checkpw(api_key,api_data_dict.get(api_name)) is False:
+                await ip_blocker(conn_obj=request)
+                abort(401)
+            else:
+                auth_check = True
+        else:
+            if bcrypt.checkpw(api_key, api_data_dict.get(api_name)) is False:
+                await ip_blocker(conn_obj=request)
+                abort(401)
+            else:
+                auth_check = True
+        return api_data_dict, auth_check
     except ExpiredSignatureError:
         logger.warning("JWT expired, need to refresh token")
         await ip_blocker(conn_obj=request)
@@ -253,7 +240,7 @@ async def check_ip_ws():
             return None
 
 @app.websocket(f"{probe_url}/channels/<string:probe_id>/<int:connect_type>")
-@rate_exempt
+@user_login_required
 async def heartbeat(probe_id, connect_type):
     global connected_probes
     
@@ -337,7 +324,7 @@ async def register():
     if not api_key:
         await ip_blocker(conn_obj=request)
         abort(401)
-    _, auth_check = await jwt_verification(request=request, type='prb', api_key=api_key)
+    _, auth_check = await jwt_verification(request=request, api_key=api_key)
 
     if auth_check is True:
         user_data = await request.get_json()
@@ -384,7 +371,7 @@ async def login():
     if not api_key:
         await ip_blocker(conn_obj=request)
         abort(401)
-    _, auth_check = await jwt_verification(request=request, type='prb', api_key=api_key)
+    _, auth_check = await jwt_verification(request=request, api_key=api_key)
     
     if auth_check is True:
         auth_data = await request.get_json()
@@ -436,13 +423,11 @@ async def login():
 @app.route(f'{main_url}/logout/<string:auth_id>', methods=['GET'])
 @user_login_required
 async def logout(auth_id):
-    cur_usr_id = auth_id
-
-    if await cl_sess_db.get_all_data(match=f'{cur_usr_id}', cnfrm=True) is False:
+    if await cl_sess_db.get_all_data(match=f'{auth_id}', cnfrm=True) is False:
             await ip_blocker()
             return Unauthorized()
         
-    if await cl_sess_db.del_obj(key=cur_usr_id) is not None:
+    if await cl_sess_db.del_obj(key=auth_id) is not None:
         client_auth.logout_user()
         return jsonify(), 200
     
@@ -452,7 +437,7 @@ async def prbinit():
     if not api_key:
         await ip_blocker(conn_obj=request)
         abort(401)
-    api_data_dict = await jwt_verification(request=request, type='prb', api_key=api_key)
+    api_data_dict = await jwt_verification(request=request, api_key=api_key)
     api_jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
     api_rand = api_data_dict.get(f'{api_name}_rand')
     api_id = api_data_dict.get(f'{api_name}_id')
@@ -473,13 +458,12 @@ async def prbinit():
 async def prbenroll():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     site = request.args.get('site')
-    jwt_token = request.cookies.get('access_token')
-    if not api_key or not jwt_token:
+    if not api_key:
         await ip_blocker(conn_obj=request)
         abort(401)
     if not site:
         site = 'default'
-    await jwt_verification(jwt_token=jwt_token, request=request, api_key=api_key, type='prb')
+    await jwt_verification(request=request, api_key=api_key)
     adopted_probe_data = await request.get_json()
     if await cl_data_db.upload_db_data(id=adopted_probe_data['prb_id'], data=adopted_probe_data) > 0:
         return jsonify(), 200
@@ -487,13 +471,8 @@ async def prbenroll():
         return jsonify(), 400
     
 @app.route(f'{probe_url}/delete', methods=['POST'])
+@user_login_required
 async def prbdelete():
-    jwt_token = request.cookies.get("access_token")
-    sess_id = request.args.get('sess_id')   
-    if not jwt_token or not sess_id:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    await jwt_verification(sess_id=sess_id, jwt_token=jwt_token, request=request)
     data = await request.get_json() 
     id = data['id']
     result = await cl_data_db.del_obj(key=id)
@@ -504,11 +483,7 @@ async def prbdelete():
 @app.route(f'{probe_url}/ingest', methods=['POST'])
 async def prbingest():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
-    jwt_token = request.cookies.get("access_token")
-    if not jwt_token:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    await jwt_verification(jwt_token=jwt_token, request=request, api_key=api_key, type='prb')
+    await jwt_verification(request=request, api_key=api_key)
     data = await request.get_json()
     if data is None:
         return jsonify(), 400
@@ -522,46 +497,31 @@ async def prbingest():
 @app.route(f'{probe_url}/analysis', methods=['POST'])
 async def prbanalysis():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
-    jwt_token = request.cookies.get('access_token')
-    if not api_key or not jwt_token:
+    if not api_key:
         await ip_blocker(conn_obj=request)
         abort(401)
-    await jwt_verification(jwt_token=jwt_token, request=request, api_key=api_key, type='prb')
+    await jwt_verification(request=request, api_key=api_key)
     data = await request.get_json()
     if data is None:
         return jsonify(), 400
-    analysis_prompt = data['prompt']
-    analysis_instructions = (
-        NET_ADMIN_INSTRUCTIONS
-        + "\n\n"
-        + ANALYSIS_INSTRUCTIONS
-        + "\n\n"
-        + NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
-        )                 
-    payload = {
-        'model': os.getenv('OLLAMA_MODEL'),
-        'message': f"{analysis_prompt}",
-        'name': f"{data['name']}",
-        'instructions': analysis_instructions,
-    }
-    chat_resp, chat_resp_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analysis", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-    if chat_resp == 200:
-        alerts = str(data['notif_list']).split(',')
-        await comm_mgr.send_llm_response(alerts=alerts, flow_name=data['name'], prompt=data['prompt'], llm_resp=chat_resp_data, task_output=data['task_output'])
+
+    anlys_payload = {
+                            'content': data['content'],
+                            'metadata': json.dumps({"type": f"chat_{data['prb_id']}",
+                                                    "prb_id": f"{data['prb_id']}"}),
+                            'available_tools': data['tool_instructions'],
+                            'detect_type': 1
+                        }
+    anlys_status, anlys_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch", data=anlys_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))  
+    
+    if anlys_status == 200:
+        return jsonify({'output': anlys_resp}), 200
+    
 
 @app.route('/v1/api/core/flows', defaults={'task': None}, methods=['POST'])            
 @app.route('/v1/api/core/flows/<string:task>', methods=['POST'])
-@rate_exempt
+@user_login_required
 async def flow(task):
-    sess_id = request.args.get('sess_id')   
-    jwt_token = request.cookies.get('access_token')
-    if not jwt_token:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    if await ws_rate_limiter.check_rate_limit(client_id=jwt_token) is False:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    await jwt_verification(sess_id=sess_id, jwt_token=jwt_token, request=request)
     data = await request.get_json()
     if task is None or data is None:
         await ip_blocker(conn_obj=request)
@@ -596,21 +556,10 @@ async def flow(task):
                 return jsonify(), 400
        
 @app.route('/v1/api/core/reset', methods=['GET'])
-@rate_exempt
+@user_login_required
 async def reset():
-    sess_id = request.args.get('sess_id')   
-    jwt_token = request.cookies.get('access_token')
-    if not jwt_token:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    if await ws_rate_limiter.check_rate_limit(client_id=jwt_token) is False:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    await jwt_verification(sess_id=sess_id, jwt_token=jwt_token, request=request)
-
     prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
     prim_contact_dict = next(iter(prim_contact.values()))
-    email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
     old_api_data = await cl_data_db.get_all_data(match=f"{api_name}:dta:*")
     old_api_data_dict = next(iter(old_api_data.values())) if old_api_data else None
     if await cl_data_db.del_obj(key=f"{api_name}:dta:{old_api_data_dict.get(f'{api_name}_id')}") is not None:

@@ -249,7 +249,8 @@ class RAGEngine:
         content: str,
         metadata: Dict[str, Any],
         detect_type: int,
-        available_tools: str = None
+        available_tools: str = None,
+        user_prompt: str = None
     ) -> Dict[str, Any]:
         
         similar = await self.query_similar(
@@ -266,23 +267,27 @@ class RAGEngine:
 
         
         # LLM analysis for anomaly detection
-        anomaly_prompt = f"""Analyze the following {metadata.get('flow')} automation workflow network tools output for anomalies, security issues, 
-        or unusual patterns. Compare it with historical data if available.
+        anomaly_prompt = f"""Analyze the following {metadata.get('flow')} automation workflow network tools output for anomalies, security issues, or unusual patterns. Compare it with historical data if available.
 
         Current Output:
         {content}
 
         Historical Similar Patterns:
         {historical_context}
-
-        Identify:
-        1. Any security threats (port scans, suspicious traffic, etc.)
-        2. Performance issues (packet loss, high latency, etc.)
-        3. Configuration problems
-        4. Anomalies compared to historical patterns
-        5. Severity level (CRITICAL, HIGH, MEDIUM, LOW, INFO)
         \n
         """
+        if user_prompt is not None:
+            anomaly_prompt+=f"Scope your analysis according to the specifications and inquiries in the following user prompt: {user_prompt}.\n\n"
+        else:
+            anomaly_prompt+="""
+            Identify:
+            1. Any security threats (port scans, suspicious traffic, etc.)
+            2. Performance issues (packet loss, high latency, etc.)
+            3. Configuration problems
+            4. Anomalies compared to historical patterns
+            5. Severity level (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+            \n\n
+            """
 
         if detect_type == 0:
             anomaly_prompt+= "Provide your analysis in JSON format with keys: severity, anomalies (list), recommendations (list)"
@@ -318,7 +323,7 @@ class RAGEngine:
     async def decide_action(
         self,
         anomaly_result: Dict[str, Any],
-        available_tools: str
+        available_tools: str = None
     ) -> Dict[str, Any]:
         """
         Decide what action to take based on anomaly detection
@@ -336,10 +341,8 @@ class RAGEngine:
         decision_prompt = f"""Based on the following anomaly detection results, decide what actions to take.
 
         Severity: {severity}
-        Anomalies Found: {json.dumps(anomalies, indent=2)}
-        
-        Available MCP Tools: \n{available_tools}\n\n
-        
+        Anomalies Found: {json.dumps(anomalies, indent=2)}\n\n
+              
         Decide:
         1. Should an alert be sent? (yes/no)
         2. Which alert channels? (email, slack, jira, etc.)
@@ -347,7 +350,10 @@ class RAGEngine:
         4. What MCP tools should be called and with what parameters?
         
         Respond in JSON format with keys: send_alert (bool), alert_channels (list), 
-        remediation_needed (bool), mcp_actions (list of dicts with tool and params)"""
+        remediation_needed (bool), mcp_actions (list of dicts with tool and params)\n\n"""
+
+        if available_tools is not None:
+            decision_prompt+=f"Available MCP Tools: \n{available_tools}\n\n"
         
         decision = await self.analyze_with_llm("", decision_prompt)
         
@@ -380,8 +386,8 @@ class RAGEngine:
         
         return decision_data
     
-    async def batch_content_processing(self, content: str,  metadata: Dict[str, Any], available_tools: str = None, detect_type: int = 1):
-        anomaly_result = await self.detect_anomalies(content=content, metadata=metadata, available_tools=available_tools, detect_type=detect_type) 
+    async def batch_content_processing(self, content: str,  metadata: Dict[str, Any], available_tools: str = None, detect_type: int = 1, user_prompt: str = None):
+        anomaly_result = await self.detect_anomalies(content=content, metadata=metadata, available_tools=available_tools, detect_type=detect_type, user_prompt=user_prompt) 
         if detect_type == 0:               
             action_decision = await self.decide_action(anomaly_result, available_tools)
             return action_decision

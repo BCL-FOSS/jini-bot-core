@@ -1,7 +1,8 @@
 import ast
 import argparse
 import asyncio
-from backend.init_app import logger, util_obj
+from backend.init_app import logger, util_obj, cl_auth_db
+from backend.app import email_script_path
 import os
 import json
 
@@ -122,11 +123,12 @@ class RemoteFlowRunner:
                         agent['prompt'] = node_data['bot-prompt']
                         agent['agent'] = node_data['name']
                     else:
-                        agent['prompt'] = None
+                        pass
 
         if remote_tools_to_execute != {}:
             all_probes_documents=[]
-            all_probes_content=""
+            all_probes_content="All automation workflow network tool outputs according to probe:\n\n"
+            all_probes_tools=[]
             for probe in remote_tools_to_execute:
                 headers = {'content-type': 'application/json',
                            'x-api-key': probe['api']}
@@ -141,13 +143,41 @@ class RemoteFlowRunner:
                     probe_document = json.loads(task_resp_json['output'])
                     all_probes_documents.append(list(probe_document).copy())
                     all_probes_content+=f"{task_resp_json['anlys_output']}\n\n"
+                    all_probes_tools.append(json.loads(task_resp_json['tools']))
                                                 
             ingest_payload = {'documents': json.dumps(all_probes_documents)}
             ingest_url = f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch"
             ingest_resp, ingest_resp_json = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=ingest_url, data=ingest_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-            if ingest_resp == 200:
-                return
+            if ingest_resp == 200 and agent['prompt']:
+                anlys_payload = {
+                    'content': all_probes_content,
+                    'metadata': json.dumps({"type": f"flow_{flow_name}"}),
+                    'available_tools': all_probes_tools[0],
+                    'detect_type': 1,
+                    'prompt': agent['prompt']
+                }
+                anlys_status, anlys_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch", data=anlys_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))  
+                if anlys_status == 200:
+                    prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
+                    prim_contact_dict = next(iter(prim_contact.values()))
+                    html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
+                                            <p>Hello,</p>
+                                            <p>{os.getenv('JINIBOT_NAME')}'s {flow_name} Analysis:</p>
+                                            <p>{anlys_resp}</p>
             
+                    
+                                            </div>"""
+                    email_params = {'sender': {'name': f'{os.getenv('JINIBOT_NAME')}', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+                                                'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('eml')}],
+                                                'subject': f"{os.getenv('JINIBOT_NAME')} {flow_name} Analysis Report",
+                                                'hmtl_content': html_snippet }
+                                
+                    email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
+                    email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
+                    if email_code == 0:
+                        logger.info(f'Flow {flow_name} complete')
+                        return
+                
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run network automation workflows.")
     parser.add_argument(

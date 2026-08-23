@@ -410,9 +410,10 @@ async def analyze_batch():
     metadata = data.get('metadata')
     available_tools = data.get('available_tools')
     detect_type = data.get('detect_type')
-    if not batch_content or not metadata or not available_tools or not detect_type:
+    prompt = data.get('prompt')
+    if not batch_content or not metadata or not detect_type:
         return jsonify(), 400
-    action_decision = await rag_engine.batch_content_processing(content=batch_content, metadata=json.loads(metadata), available_tools=available_tools, detect_type=detect_type)
+    action_decision = await rag_engine.batch_content_processing(content=batch_content, metadata=json.loads(metadata), available_tools=available_tools, detect_type=detect_type, user_prompt=prompt)
     return jsonify(action_decision), 200
     
 @app.route('/v1/history', methods=['GET'])

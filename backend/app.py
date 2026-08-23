@@ -135,7 +135,6 @@ async def jwt_verification(request: Request | Websocket, api_key: str = None):
 
 async def _receive_probe() -> None:
     while True:
-        global connected_probes
         message = await websocket.receive()
         logger.debug(message)
         message = json.loads(message)
@@ -144,7 +143,6 @@ async def _receive_probe() -> None:
             match action:
                 case 'hb':
                     logger.debug(f"Received probe {message['sess_id']} heartbeat: {message}")
-                    global connected_probes
                     now = datetime.now(tz=timezone.utc)
                     if message["sess_id"] in connected_probes:
                         entry = connected_probes.get(message["sess_id"])
@@ -155,6 +153,15 @@ async def _receive_probe() -> None:
                             connected_probes[message["sess_id"]]['exp'] = new_exp
                             logger.debug(f"Refreshed ping expiry for session {message['sess_id']} to {new_exp}")
                     else:
+                        pass
+                case'map':
+                    map_id = f"map:{message['sess_id']}:{message['timestamp']}"
+                    probe_maps = {'parsed': message['map'],
+                                  'raw': message['raw_map'],
+                                  'id': map_id}
+                    
+                    if await cl_data_db.upload_db_data(id=map_id, data=probe_maps) > 0:
+                        logger.info(f"Network Map for Probe {message['sess_id']} received")
                         pass
                 case _:
                     pass
@@ -190,21 +197,17 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
             # Expiration occurred
             if now_quant > exp_quant:
                 logger.info(f"Session {sess_id} expired at {exp_quant} (now_quant={now_quant})")
-                if connected_probes['sess_id']['status'] == 'offline':
+                if connected_probes[sess_id]['status'] == 'offline':
                     continue
 
-                if connected_probes['sess_id']['status'] == 'online':
-                    connected_probes['sess_id']['status'] = 'offline'
-                    connected_probes['sess_id']['badge'] = 'failure'
+                if connected_probes[sess_id]['status'] == 'online':
+                    connected_probes[sess_id]['status'] = 'offline'
+                    connected_probes[sess_id]['badge'] = 'failure'
 
-                    alert={'alert': 'outage'}
+                    alert={'alert': 'outage',
+                           'sess_id': sess_id}
 
-                    await Broker(connected_probes['sess_id']['broker']).publish(message=json.dumps(alert))
-
-                    prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
-                    prim_contact_dict = next(iter(prim_contact.values()))
-                    
-            
+                    await Broker(connected_probes[sess_id]['broker']).publish(message=json.dumps(alert))
             else:
                 # Not yet expired: sleep until the sooner of check_interval or time to expiry (based on quantized values)
                 seconds_to_expiry = (exp_quant - now_quant).total_seconds()
@@ -249,12 +252,6 @@ async def heartbeat(probe_id, connect_type):
             await ip_blocker(conn_obj=websocket, auto_ban=True)
             await websocket.close()
 
-        usr_sess_id = websocket.args.get('sess_id') if websocket.args.get('sess_id') is not None else None
-
-        if usr_sess_id is not None and usr_sess_id not in auth_ping_counter:
-            await ip_blocker(conn_obj=websocket, auto_ban=True)
-            await websocket.close()
-
         if await cl_data_db.get_all_data(match=f"*{probe_id}*", cnfrm=True) is False:
             await ip_blocker(conn_obj=websocket, auto_ban=True)
             await websocket.close()
@@ -266,8 +263,6 @@ async def heartbeat(probe_id, connect_type):
         monitor_task = None
         if connect_type == 0:
             if probe_id and (probe_id not in connected_probes):
-                if usr_sess_id is not None:
-                    await websocket.close()
                 now = datetime.now(tz=timezone.utc)
                 connected_probes[probe_id] = {'conn_start': now,
                                         'id': probe_id,
@@ -431,6 +426,25 @@ async def logout(auth_id):
         client_auth.logout_user()
         return jsonify(), 200
     
+@app.route(f'{probe_url}', defaults={'info': 'all'}, methods=['GET'])
+@app.route(f'{probe_url}/<string:info>/<string:prb_id>', methods=['GET'])
+@user_login_required
+async def info(info, prb_id):
+    match info:
+        case 'all':
+            all_probes = await cl_data_db.get_all_data(match="prb:*")
+            parsed_probes = next(iter(all_probes.values()))
+            return jsonify(parsed_probes), 200
+        case 'prb':
+            if await cl_data_db.get_all_data(match=f"*{prb_id}*", cnfrm=True) is True:
+                probe = await cl_data_db.get_all_data(match=f"*{prb_id}*")
+                parsed_probe = next(iter(probe.values()))
+                return jsonify(parsed_probe), 200
+        case 'maps':
+            maps = await cl_data_db.get_all_data(match=f"map:{prb_id}*")
+            all_maps = next(iter(maps.values()))
+            return jsonify(all_maps), 200
+ 
 @app.route(f'{probe_url}/init', methods=['GET'])
 async def prbinit():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
@@ -490,9 +504,11 @@ async def prbingest():
     payload = {
         'documents': data['documents'],       
     }
-    chat_resp, chat_resp_data = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+    chat_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
     if chat_resp == 200:
         return jsonify(), 200
+    else:
+        return jsonify(), 400
 
 @app.route(f'{probe_url}/analysis', methods=['POST'])
 async def prbanalysis():
@@ -506,17 +522,35 @@ async def prbanalysis():
         return jsonify(), 400
 
     anlys_payload = {
-                            'content': data['content'],
-                            'metadata': json.dumps({"type": f"chat_{data['prb_id']}",
-                                                    "prb_id": f"{data['prb_id']}"}),
-                            'available_tools': data['tool_instructions'],
-                            'detect_type': 1
-                        }
+        'content': data['content'],
+        'metadata': data['metadata'],
+        'available_tools': data['tool_instructions'],
+        'detect_type': 1,
+        'prompt': data['prompt']
+    }
     anlys_status, anlys_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch", data=anlys_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))  
     
     if anlys_status == 200:
-        return jsonify({'output': anlys_resp}), 200
-    
+        prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
+        prim_contact_dict = next(iter(prim_contact.values()))
+        html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
+                                                    <p>Hello,</p>
+                                                    <p>{os.getenv('JINIBOT_NAME')}'s {data['flow_name']} Analysis:</p>
+                                                    <p>{anlys_resp}</p>
+                    
+                            
+                                                    </div>"""
+        email_params = {'sender': {'name': f'{os.getenv('JINIBOT_NAME')}', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+                                                        'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('eml')}],
+                                                        'subject': f"{os.getenv('JINIBOT_NAME')} {data['flow_name']} Analysis Report",
+                                                        'hmtl_content': html_snippet }
+                    
+        email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
+        email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
+        if email_code == 0:
+                                logger.info(f'Flow {data['flow_name']} complete')
+                                return
+        return jsonify(), 200
 
 @app.route('/v1/api/core/flows', defaults={'task': None}, methods=['POST'])            
 @app.route('/v1/api/core/flows/<string:task>', methods=['POST'])
@@ -554,7 +588,13 @@ async def flow(task):
                     return jsonify(), 200
             else:
                 return jsonify(), 400
-       
+        case 'all':
+            all_flows = await cl_data_db.get_all_data(match=f'flow:*')
+            parsed_flows = next(iter(all_flows.values()))
+            return jsonify(parsed_flows), 200
+        case _:
+            pass
+
 @app.route('/v1/api/core/reset', methods=['GET'])
 @user_login_required
 async def reset():
@@ -589,7 +629,7 @@ async def reset():
                             'hmtl_content': html_snippet }
             
             email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
-            email_code, email_output, email_error = -await util_obj.run_shell_cmd(cmd=email_command)
+            email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
             return jsonify(), 200
         else:
             return jsonify(), 400

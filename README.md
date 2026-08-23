@@ -3,7 +3,7 @@
 Network Monitoring & Agentic Automation platform that leverages open source, locally hosted LLMs to analyze, visualize and troubleshoot on-prem and cloud environments via distributed probes.
 
 <p align="center">
-  <img width="300" height="300" src="https://github.com/BCL-FOSS/umjiniti-core/blob/main/frontend/static/img/bcl/umjinilogo.png?raw=true">
+  <img width="300" height="300" src="https://github.com/BCL-FOSS/umjiniti-core/blob/main/backend/static/img/umjinilogo.png?raw=true">
 </p>
 
 ### About ###
@@ -20,45 +20,12 @@ Network Monitoring & Agentic Automation platform that leverages open source, loc
   * [Create a new sender](https://help.brevo.com/hc/en-us/articles/208836149-Create-a-new-sender-From-name-and-From-email#h_01J7K4M7R1ADHZAXN1P35QJVX4)
 
 4. Set the necessary environment variables in the included .env
-```bash
-# onetimesecret API key for generating OTP links
-OTS_USER= # onetimesecret.com user email
-OTS_KEY= # onetimesecret.com API key
-OTS_TTL=300 # Time to live for OTP links in seconds (default 5 minutes)
-OTS_REGION=eu
-
-# Brevo API key for sending OTP links
-BREVO_API_KEY=
-BREVO_SENDER_EMAIL= # The email you added as a sender in the previous step.
-
-# Set server URL here (must be FQDN)
-SERVER_NAME=umj.baughlabs.tech
-
-# Set the preferred ollama model name
-# If changed, update the name in ollama_model_pull.sh and run to pull
-OLLAMA_MODEL=qwen3:1.7b
-
-# No need to edit anything below this comment
-IP_BAN_DB=ipbanredis
-IP_BAN_DB_PORT=5379
-CLIENT_DATA_DB=clientdatadb
-CLIENT_DATA_DB_PORT=6369
-CLIENT_AUTH_DB=clientauthdb
-CLIENT_AUTH_DB_PORT=7369
-CLIENT_SESS_DB=clientsessdb
-CLIENT_SESS_DB_PORT=8369
-RATE_LIMIT_DB=ratelimitdb
-RATE_LIMIT_DB_PORT=9379
-REQUEST_TIMEOUT=600
-API_TOKEN_NAME=wkflw_token
-MAX_AUTH_ATTEMPTS=3
-```
 
 5. Change the url in the Caddyfile to match SERVER_NAME
 ```bash
 # Caddyfile
 
-umj.baughlabs.tech { # Change this only. Leave eeverything else the same
+umj.baughlabs.tech { # Change this only. Leave everything else the same
   ...
   
 ```

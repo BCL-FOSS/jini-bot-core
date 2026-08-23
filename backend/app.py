@@ -155,10 +155,11 @@ async def _receive_probe() -> None:
                     else:
                         pass
                 case'map':
-                    map_id = f"map:{message['sess_id']}:{message['timestamp']}"
-                    probe_maps = {'parsed': message['map'],
-                                  'raw': message['raw_map'],
-                                  'id': map_id}
+                    map_id = f"task:{message['sess_id']}:scan_map:{message['timestamp']}"
+                    probe_maps = {'parsed': message['output'],
+                                  'raw': message['raw_output'],
+                                  'id': map_id,
+                                  'timestamp': message['timestamp']}
                     
                     if await cl_data_db.upload_db_data(id=map_id, data=probe_maps) > 0:
                         logger.info(f"Network Map for Probe {message['sess_id']} received")
@@ -504,8 +505,9 @@ async def prbingest():
     payload = {
         'documents': data['documents'],       
     }
-    chat_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-    if chat_resp == 200:
+    ingest_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+
+    if ingest_resp == 200:
         return jsonify(), 200
     else:
         return jsonify(), 400
@@ -552,8 +554,8 @@ async def prbanalysis():
                                 return
         return jsonify(), 200
 
-@app.route('/v1/api/core/flows', defaults={'task': None}, methods=['POST'])            
-@app.route('/v1/api/core/flows/<string:task>', methods=['POST'])
+@app.route(f'{main_url}/flows', defaults={'task': None}, methods=['POST'])            
+@app.route(f'{main_url}/flows/<string:task>', methods=['POST'])
 @user_login_required
 async def flow(task):
     data = await request.get_json()
@@ -595,7 +597,7 @@ async def flow(task):
         case _:
             pass
 
-@app.route('/v1/api/core/reset', methods=['GET'])
+@app.route(f'{main_url}/reset', methods=['GET'])
 @user_login_required
 async def reset():
     prim_contact = await cl_auth_db.get_all_data(match='*pct:*')

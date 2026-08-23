@@ -334,6 +334,16 @@ async def ingest_batch():
                 'content': content,
                 'metadata': metadata
             })
+
+     
+        task_output_id = f"task:{doc['prb_id']}:{doc['tool_type']}:{doc['timestamp']}"
+        task_output_data = {'parsed': doc['output'],
+                                                  'raw': doc['raw_output'],
+                                                  'id': task_output_id,
+                                                  'timestamp': doc['timestamp']}
+        
+        if await cl_data_db.upload_db_data(id=task_output_id, data=task_output_data) > 0:
+            logger.info('uploaded')
         
     count = await rag_engine.ingest_batch(processed_docs)
 

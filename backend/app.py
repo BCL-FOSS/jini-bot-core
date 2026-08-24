@@ -149,21 +149,16 @@ async def _receive_probe() -> None:
                         exp = entry.get('exp')
                         if exp and now <= exp:
                             new_exp = util_obj.round_up_to_30sec(now + timedelta(seconds=30))
-                            #entry['exp'] = new_exp
-                            connected_probes[message["sess_id"]]['exp'] = new_exp
+                            entry['exp'] = new_exp
+                            connected_probes[message["sess_id"]] = entry
                             logger.debug(f"Refreshed ping expiry for session {message['sess_id']} to {new_exp}")
                     else:
                         pass
-                case'map':
-                    map_id = f"task:{message['sess_id']}:scan_map:{message['timestamp']}"
-                    probe_maps = {'parsed': message['output'],
-                                  'raw': message['raw_output'],
-                                  'id': map_id,
-                                  'timestamp': message['timestamp']}
-                    
-                    if await cl_data_db.upload_db_data(id=map_id, data=probe_maps) > 0:
+                case 'map':
+                    doc_id = f"map_{message['timestamp']}_{message['sess_id']}_{str(uuid.uuid4())}"
+                    data=[(message['sess_id'], f'$.devices.{doc_id}', json.loads(message['map']))]
+                    if await cl_data_db.json_obj_mgr(task='ms', update_data=data):
                         logger.info(f"Network Map for Probe {message['sess_id']} received")
-                        pass
                 case _:
                     pass
         else:
@@ -434,35 +429,19 @@ async def logout(auth_id):
         client_auth.logout_user()
         return jsonify(), 200
     
-@app.route(f'{probe_url}/data', defaults={'info': 'all', 'prb_id': None ,'tool': None}, methods=['GET'])
-@app.route(f'{probe_url}/data/<string:info>/<string:prb_id>/<string:tool>', methods=['GET'])
+@app.route(f'{probe_url}/data', methods=['POST'])
 @user_login_required
-async def prbdata(info, prb_id, tool):
-    match info:
-        case 'all':
-            all_probes = await cl_data_db.get_all_data(match="prb:*")
-            parsed_probes = next(iter(all_probes.values()))
-            return jsonify(parsed_probes), 200
-        case 'prb':
-            if await cl_data_db.get_all_data(match=f"*{prb_id}*", cnfrm=True) is True:
-                probe = await cl_data_db.get_all_data(match=f"*{prb_id}*")
-                parsed_probe = next(iter(probe.values()))
-                return jsonify(parsed_probe), 200
-        case 'tskdta':
-            query = f"task:{prb_id}"
-            if tool is not None:
-                query+=f":{tool}"
-            
-            maps = await cl_data_db.get_all_data(match=f"{query}*")
-            all_maps = next(iter(maps.values()))
-            return jsonify(all_maps), 200 
-        case 'alert':
-            query="alert:"
-            if prb_id is not None:
-                query+=f"{prb_id}"
-            alerts = await cl_data_db.get_all_data(match=f"{query}*")
-            alerts_parsed = next(iter(alerts.values()))
-            return jsonify(alerts_parsed), 200
+async def prbdata():
+    data = await request.get_json()
+    if not data:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    probes=None
+    if data['pattern']:
+        probes = await cl_data_db.json_obj_mgr(task='g', pattern=data['pattern'])
+    else:
+        probes = await cl_data_db.json_obj_mgr(task='g')
+    return jsonify(probes), 200
  
 @app.route(f'{probe_url}/init', methods=['GET'])
 async def prbinit():
@@ -486,7 +465,6 @@ async def prbinit():
         )
     return response
   
-    
 @app.route(f'{probe_url}/enroll', methods=['POST'])
 async def prbenroll():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
@@ -498,7 +476,20 @@ async def prbenroll():
         site = 'default'
     await jwt_verification(request=request, api_key=api_key)
     adopted_probe_data = await request.get_json()
-    if await cl_data_db.upload_db_data(id=adopted_probe_data['prb_id'], data=adopted_probe_data) > 0:
+    adopted_probe_data['devices']={}
+    adopted_probe_data['trace_results']={}
+    adopted_probe_data['perf_results']={}
+    adopted_probe_data['scan_results']={}
+    adopted_probe_data['pcap_results']={}
+    adopted_probe_data['alerts']={}
+    adopted_probe_data['chats']={}
+    adopted_probe_data['tasks']={}
+    adopted_probe_data['flows']={}
+    adopted_probe_data['tux_count']=0
+    adopted_probe_data['win_count']=0
+    adopted_probe_data['android_count']=0
+    adopted_probe_data['iphone_count']=0
+    if await cl_data_db.json_obj_mgr(task='s', new_data=adopted_probe_data, data_name=adopted_probe_data['prb_id']) is not None:
         return jsonify(), 200
     else:
         return jsonify(), 400

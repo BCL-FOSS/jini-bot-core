@@ -1,6 +1,7 @@
 import redis.asyncio as redis
 import json
 import logging
+from typing import List
 
 class RedisDB:
    
@@ -105,5 +106,24 @@ class RedisDB:
             return json.dumps({"error": str(e)})
         finally:
             await self.redis_conn.close()
+
+    async def json_obj_mgr(self, task: str, update_data: List[tuple]=None, data_name:str=None, new_data: dict=None, keys: List[str]=None, path: str = '$', pattern = "prb:*"):
+        await self.connect_db()
+        result=None
+        match task:
+            case 's':
+                result=await self.redis_conn.json().set(data_name, "$", new_data)
+            case 'ms':
+                result=await self.redis_conn.json().mset(update_data)
+            case 'g':
+                matching_keys = await list(self.redis_conn.scan_iter(match=pattern))
+                if matching_keys:
+                    json_data = self.redis_conn.json().mget(matching_keys, '$')
+                result = dict(zip(matching_keys, json_data))
+            case 'd':
+                result=await self.redis_conn.json().delete(keys=keys[0], path=path)
+        await self.redis_conn.close()
+        return result
+        
         
 

@@ -316,14 +316,14 @@ async def ingest_batch():
         
     processed_docs = []
     parsed_docs = json.loads(documents)
+    new_tool_outputs=[]
     for doc in parsed_docs:
         tool_type = doc.get('tool_type')
-        output = doc.get('output')
         metadata = doc.get('metadata')
         prb_id = metadata.get('prb_id')
         content = doc.get('content')
         doc_id = doc.get('doc_id')    
-        if not tool_type or not output:
+        if not tool_type :
             continue
             
         if 'timestamp' not in metadata:
@@ -335,15 +335,18 @@ async def ingest_batch():
                 'metadata': metadata
             })
 
-     
-        task_output_id = f"task:{doc['prb_id']}:{doc['tool_type']}:{doc['timestamp']}"
-        task_output_data = {'parsed': doc['output'],
-                            'raw': doc['raw_output'],
-                            'id': task_output_id,
-                            'timestamp': doc['timestamp']}
+        match str(tool_type):
+            case str() as s if s.startswith('scan_'):
+                new_tool_outputs.append((prb_id, f"$.scan_results.{doc_id}", doc['parsed_output']))
+            case str() as s if s.startswith('trcrt'):
+                new_tool_outputs.append((prb_id, f"$.trace_results.{doc_id}", doc['parsed_output']))
+            case str() as s if s.startswith('pcap_'):
+                new_tool_outputs.append((prb_id, f"$.pcap_results.{doc_id}", doc['parsed_output']))
+            case str() as s if s.startswith('test_'):
+                new_tool_outputs.append((prb_id, f"$.trace_results.{doc_id}", doc['parsed_output']))
         
-        if await cl_data_db.upload_db_data(id=task_output_id, data=task_output_data) > 0:
-            logger.info('uploaded')
+    if await cl_data_db.json_obj_mgr(task='ms', update_data=new_tool_outputs) is not None:
+        logger.info('upload complete')
         
     count = await rag_engine.ingest_batch(processed_docs)
 

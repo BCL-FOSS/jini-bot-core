@@ -205,10 +205,17 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                     connected_probes[sess_id]['status'] = 'offline'
                     connected_probes[sess_id]['badge'] = 'failure'
 
-                    alert={'alert': 'outage',
-                           'sess_id': sess_id}
+                    alert_id=f"alert:{sess_id}:{str(uuid.uuid4())}"
+                    alert_data={'alert': 'outage',
+                           'sess_id': sess_id,
+                           'id': alert_id
+                    }
 
-                    await Broker(connected_probes[sess_id]['broker']).publish(message=json.dumps(alert))
+                    await Broker(connected_probes[sess_id]['broker']).publish(message=json.dumps(alert_data))
+
+                    if await cl_data_db.upload_db_data(id=alert_id, data=alert_data) > 0:
+                        logger.info(f"{sess_id} {alert_data['alert']} processed")
+                    
             else:
                 # Not yet expired: sleep until the sooner of check_interval or time to expiry (based on quantized values)
                 seconds_to_expiry = (exp_quant - now_quant).total_seconds()
@@ -427,10 +434,10 @@ async def logout(auth_id):
         client_auth.logout_user()
         return jsonify(), 200
     
-@app.route(f'{probe_url}', defaults={'info': 'all'}, methods=['GET'])
-@app.route(f'{probe_url}/<string:info>/<string:prb_id>', methods=['GET'])
+@app.route(f'{probe_url}/data', defaults={'info': 'all', 'prb_id': None ,'tool': None}, methods=['GET'])
+@app.route(f'{probe_url}/data/<string:info>/<string:prb_id>/<string:tool>', methods=['GET'])
 @user_login_required
-async def info(info, prb_id):
+async def prbdata(info, prb_id, tool):
     match info:
         case 'all':
             all_probes = await cl_data_db.get_all_data(match="prb:*")
@@ -441,10 +448,21 @@ async def info(info, prb_id):
                 probe = await cl_data_db.get_all_data(match=f"*{prb_id}*")
                 parsed_probe = next(iter(probe.values()))
                 return jsonify(parsed_probe), 200
-        case 'maps':
-            maps = await cl_data_db.get_all_data(match=f"map:{prb_id}*")
+        case 'tskdta':
+            query = f"task:{prb_id}"
+            if tool is not None:
+                query+=f":{tool}"
+            
+            maps = await cl_data_db.get_all_data(match=f"{query}*")
             all_maps = next(iter(maps.values()))
-            return jsonify(all_maps), 200
+            return jsonify(all_maps), 200 
+        case 'alert':
+            query="alert:"
+            if prb_id is not None:
+                query+=f"{prb_id}"
+            alerts = await cl_data_db.get_all_data(match=f"{query}*")
+            alerts_parsed = next(iter(alerts.values()))
+            return jsonify(alerts_parsed), 200
  
 @app.route(f'{probe_url}/init', methods=['GET'])
 async def prbinit():

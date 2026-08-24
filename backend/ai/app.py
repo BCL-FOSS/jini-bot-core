@@ -338,9 +338,9 @@ async def ingest_batch():
      
         task_output_id = f"task:{doc['prb_id']}:{doc['tool_type']}:{doc['timestamp']}"
         task_output_data = {'parsed': doc['output'],
-                                                  'raw': doc['raw_output'],
-                                                  'id': task_output_id,
-                                                  'timestamp': doc['timestamp']}
+                            'raw': doc['raw_output'],
+                            'id': task_output_id,
+                            'timestamp': doc['timestamp']}
         
         if await cl_data_db.upload_db_data(id=task_output_id, data=task_output_data) > 0:
             logger.info('uploaded')
@@ -425,45 +425,3 @@ async def analyze_batch():
         return jsonify(), 400
     action_decision = await rag_engine.batch_content_processing(content=batch_content, metadata=json.loads(metadata), available_tools=available_tools, detect_type=detect_type, user_prompt=prompt)
     return jsonify(action_decision), 200
-    
-@app.route('/v1/history', methods=['GET'])
-async def get_history():
-    """
-    Get ingestion history from Redis
-    
-    Query params:
-    - tool_type: Filter by tool type
-    - has_anomalies: Filter by anomaly presence (true/false)
-    """
-    tool_type = request.args.get('tool_type')
-    has_anomalies = request.args.get('has_anomalies')
-        
-    if tool_type:
-        pattern = f"{tool_type}_*"
-    else:
-        pattern = "*"
-        
-    all_data = await cl_data_db.get_all_data(match=pattern)
-        
-    if not all_data:
-        return jsonify(), 200
-        
-    history = []
-    for doc_id, data in all_data.items():
-        if has_anomalies is not None:
-            has_anom = data.get('has_anomalies', 'False') == 'True'
-            filter_anom = has_anomalies.lower() == 'true'
-            if has_anom != filter_anom:
-                continue
-            
-        history.append({
-                "document_id": doc_id,
-                "tool_type": data.get('tool_type'),
-                "timestamp": data.get('timestamp'),
-                "has_anomalies": data.get('has_anomalies') == 'True'
-            })
-        
-    return jsonify({
-            "count": len(history),
-            "history": history
-        }), 200

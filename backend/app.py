@@ -101,11 +101,11 @@ async def jwt_verification(request: Request, api_key: str = None, auth_id: str =
             api_data = await cl_auth_db.get_all_data(match=f"{api_name}:dta:*")
             if api_data is None:
                 await ip_blocker(conn_obj=request)
-                abort(401)
+                return Unauthorized()
             api_data_dict = next(iter(api_data.values()))
             if bcrypt.checkpw(api_key.encode(), bytes(api_data_dict.get(api_name))) is False:
                 await ip_blocker(conn_obj=request)
-                abort(401)
+                return Unauthorized()
             else:
                 auth_check = True
 
@@ -114,12 +114,12 @@ async def jwt_verification(request: Request, api_key: str = None, auth_id: str =
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             await ip_blocker(conn_obj=request)
-            abort(401)
+            return Unauthorized()
         token = auth_header.split(" ")[1]
         sess_data = await retrieve_user_sess_data(sess_id=auth_id)
         if bcrypt.checkpw(password=token.encode(), hashed_password=bytes(sess_data.get('auth_token'))) is False:
             await ip_blocker(conn_obj=request)
-            abort(401)
+            return Unauthorized()
         else:
             auth_check = True
 
@@ -136,18 +136,18 @@ async def ws_jwt_verification(request: Websocket = None, api_token: str=None):
             decoded_token = jwt.decode(jwt=api_token, key=jwt_key , algorithms=["HS256"])
             if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand'):
                 await ip_blocker(conn_obj=request)
-                abort(401)
+                return Unauthorized()
           
         if request:
             auth_id = request.args.get('id')
             token = request.args.get('token')
             if not auth_id or not token:
                 await ip_blocker(conn_obj=request)
-                abort(401)
+                return Unauthorized()
             sess_data = await retrieve_user_sess_data(sess_id=auth_id)
             if bcrypt.checkpw(password=token.encode(), hashed_password=bytes(sess_data.get('auth_token'))) is False:
                 await ip_blocker(conn_obj=request)
-                abort(401)
+                return Unauthorized()
     except ExpiredSignatureError:
         logger.warning("JWT expired, need to refresh token")
         await ip_blocker(conn_obj=request)
@@ -194,11 +194,8 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
     logger.info(f"Starting session watchdog for {sess_id}")
     while True:
         try:
-            if connected_probes.get(sess_id):
-                entry = connected_probes.get(sess_id)
-
+            entry = connected_probes.get(sess_id)
             now = datetime.now(tz=timezone.utc)
-
             if not entry:
                 # No entry yet (client hasn't pinged). We still want to expire after specified time from connection start,
                 # but the connection code initializes an entry at connect. So just sleep and continue.
@@ -210,11 +207,8 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                 await asyncio.sleep(check_interval)
                 continue
 
-           
             now_quant = util_obj.round_down_to_30sec(now)
             exp_quant = util_obj.round_up_to_30sec(exp)
-
-            #logger.debug(f"Session {sess_id} now_quant={now_quant} exp_quant={exp_quant} (raw now={now} raw exp={exp})")
 
             # Expiration occurred
             if now_quant > exp_quant:
@@ -260,7 +254,7 @@ async def startup():
 @app.before_request
 async def check_ip():
     if await ip_blocker(conn_obj=request, check_if_allowed=True) is False:
-        abort(401)
+        return Unauthorized()
 
 @app.before_websocket
 async def check_ip_ws():
@@ -277,19 +271,23 @@ async def heartbeat(probe_id, connect_type):
         if not token:
             await ip_blocker(conn_obj=websocket)
             await websocket.close()
+            return Unauthorized()
 
         await ws_jwt_verification(api_token=token)
         if probe_id is None or probe_id.strip() == "":
             await ip_blocker(conn_obj=websocket)
             await websocket.close()
+            return Unauthorized()
 
         if await cl_data_db.get_all_data(match=f"*{probe_id}*", cnfrm=True) is False:
             await ip_blocker(conn_obj=websocket, auto_ban=True)
             await websocket.close()
+            return Unauthorized()
 
         if await ws_rate_limiter.check_rate_limit(client_id=probe_id) is False:
             await ip_blocker(conn_obj=websocket)
             await websocket.close()
+            return Unauthorized()
 
         monitor_task = None
         if connect_type == 0:
@@ -354,21 +352,13 @@ async def users():
         logger.error(e)
     except asyncio.CancelledError as e:
         logger.error(e)
-    except ExpiredSignatureError:
-        logger.warning("JWT expired, need to refresh token")
-        await ip_blocker(conn_obj=websocket)
-        logger.error(ExpiredSignatureError)
-    except InvalidTokenError as e:
-        logger.error(f"JWT invalid: {e}")
-        await ip_blocker(conn_obj=websocket)
-        logger.error(InvalidTokenError)
 
 @app.route(f'{main_url}/register', methods=['POST'])
 async def register():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        abort(401)
+        return Unauthorized()
     _, auth_check = await jwt_verification(request=request, api_key=api_key)
 
     if auth_check is True:
@@ -417,7 +407,7 @@ async def login():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        abort(401)
+        return Unauthorized()
     _, auth_check = await jwt_verification(request=request, api_key=api_key)
     
     if auth_check is True:
@@ -429,7 +419,7 @@ async def login():
     
         if await cl_auth_db.get_all_data(match=f'*uid:{username}*', cnfrm=True) is False:
             await ip_blocker(conn_obj=request)
-            abort(401)
+            return Unauthorized()
     
         account_data = await cl_auth_db.get_all_data(match=f'*uid:{username}*')    
         sub_dict = next(iter(account_data.values()))       
@@ -552,7 +542,7 @@ async def prbinit():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        abort(401)
+        return Unauthorized()
     api_data_dict, _ = await jwt_verification(request=request, api_key=api_key)
     api_jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
     api_rand = api_data_dict.get(f'{api_name}_rand')
@@ -573,7 +563,7 @@ async def prbenroll():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        abort(401)
+        return Unauthorized()
     await jwt_verification(request=request, api_key=api_key)
     site = request.args.get('site')
     if not site:
@@ -603,7 +593,7 @@ async def prbdata():
     data = await request.get_json()
     if not data:
         await ip_blocker(conn_obj=request)
-        abort(401)
+        return Unauthorized()
     probes=None
     if isinstance(data['pattern'], str):
         probes = await cl_data_db.json_obj_mgr(task='g', pattern=data['pattern'], path=data['path'])
@@ -626,7 +616,7 @@ async def prbingest():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        abort(401)
+        return Unauthorized()
     await jwt_verification(request=request, api_key=api_key)    
     data = await request.get_json()
     if data is None:
@@ -646,12 +636,12 @@ async def prbflow():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        abort(401)
+        return Unauthorized()
     await jwt_verification(request=request, api_key=api_key)
     data = await request.get_json()
     if not data:
         await ip_blocker(conn_obj=request)
-        abort(401)
+        return Unauthorized()
     if data['id'] == 'default':
         data['id'] = f"flow:{data['name']}:{str(uuid.uuid4())}" 
     await cl_data_db.json_obj_mgr(task='s', save_data=[(data['prb_id'], f"$.flows.{data['id']}", data)])

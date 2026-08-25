@@ -80,47 +80,74 @@ def user_login_required(func):
 
         token = auth_header.split(" ")[1]
 
-        if auth_id is None or auth_id.strip() == "" or await cl_sess_db.get_all_data(match=f"{auth_id}", cnfrm=True) is False or token is None or token.strip() == "".strip():
+        if auth_id is None or auth_id.strip() == "" or await cl_sess_db.get_all_data(match=f"*{auth_id}*", cnfrm=True) is False or token is None or token.strip() == "".strip():
             await ip_blocker()
             return Unauthorized()
 
         sess_data = await retrieve_user_sess_data(sess_id=auth_id)
 
-        if bcrypt.checkpw(password=token, hashed_password=sess_data.get('auth_token')) is False:
+        if bcrypt.checkpw(password=token.encode(), hashed_password=bytes(sess_data.get('auth_token'))) is False:
             await ip_blocker()
             return Unauthorized()
             
         return await app.ensure_async(func)(*args, **kwargs)
     return wrapper
 
-async def jwt_verification(request: Request | Websocket, api_key: str = None):
+async def jwt_verification(request: Request, api_key: str = None, auth_id: str = None):
     try:
+        auth_check = False
+
+        if api_key:
+            api_data = await cl_auth_db.get_all_data(match=f"{api_name}:dta:*")
+            if api_data is None:
+                await ip_blocker(conn_obj=request)
+                abort(401)
+            api_data_dict = next(iter(api_data.values()))
+            if bcrypt.checkpw(api_key.encode(), bytes(api_data_dict.get(api_name))) is False:
+                await ip_blocker(conn_obj=request)
+                abort(401)
+            else:
+                auth_check = True
+
+            return api_data_dict, auth_check
+      
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             await ip_blocker(conn_obj=request)
             abort(401)
         token = auth_header.split(" ")[1]
-        auth_check = False
-        api_data = await cl_auth_db.get_all_data(match=f"{api_name}:dta:*")
-        if api_data is None:
+        sess_data = await retrieve_user_sess_data(sess_id=auth_id)
+        if bcrypt.checkpw(password=token.encode(), hashed_password=bytes(sess_data.get('auth_token'))) is False:
             await ip_blocker(conn_obj=request)
             abort(401)
-        api_data_dict = next(iter(api_data.values()))
-        if token:
-            jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
-            decoded_token = jwt.decode(jwt=token, key=jwt_key , algorithms=["HS256"])
-            if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand') or bcrypt.checkpw(api_key, api_data_dict.get(api_name)) is False:
-                await ip_blocker(conn_obj=request)
-                abort(401)
-            else:
-                auth_check = True
         else:
-            if bcrypt.checkpw(api_key, api_data_dict.get(api_name)) is False:
+            auth_check = True
+
+        return auth_check
+    except Exception:
+        return jsonify("Error, occurred"), 400
+
+async def ws_jwt_verification(request: Websocket = None, api_token: str=None):
+    try:
+        if api_token:
+            api_data = await cl_auth_db.get_all_data(match=f"{api_name}:dta:*")
+            api_data_dict = next(iter(api_data.values()))
+            jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
+            decoded_token = jwt.decode(jwt=api_token, key=jwt_key , algorithms=["HS256"])
+            if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand'):
                 await ip_blocker(conn_obj=request)
                 abort(401)
-            else:
-                auth_check = True
-        return api_data_dict, auth_check
+          
+        if request:
+            auth_id = request.args.get('id')
+            token = request.args.get('token')
+            if not auth_id or not token:
+                await ip_blocker(conn_obj=request)
+                abort(401)
+            sess_data = await retrieve_user_sess_data(sess_id=auth_id)
+            if bcrypt.checkpw(password=token.encode(), hashed_password=bytes(sess_data.get('auth_token'))) is False:
+                await ip_blocker(conn_obj=request)
+                abort(401)
     except ExpiredSignatureError:
         logger.warning("JWT expired, need to refresh token")
         await ip_blocker(conn_obj=request)
@@ -162,14 +189,6 @@ async def _receive_probe() -> None:
                     pass
         else:
             pass
-
-
-async def _receive_user() -> None:
-    while True:
-        message = await websocket.receive()
-        logger.debug(message)
-        message = json.loads(message)
-        await broker.publish(message=json.dumps(message))
 
 async def session_watchdog(sess_id: str, check_interval: float = 5.0):
     logger.info(f"Starting session watchdog for {sess_id}")
@@ -214,6 +233,7 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                     }
 
                     await Broker(connected_probes[sess_id]['broker']).publish(message=json.dumps(alert_data))
+                    await broker.publish(message=json.dumps(alert_data))
 
                     if await cl_data_db.upload_db_data(id=alert_id, data=alert_data) > 0:
                         logger.info(f"{sess_id} {alert_data['alert']} processed")
@@ -244,7 +264,7 @@ async def check_ip():
 
 @app.before_websocket
 async def check_ip_ws():
-    if await ip_blocker(conn_obj=request, check_if_allowed=True) is False:
+    if await ip_blocker(conn_obj=websocket, check_if_allowed=True) is False:
         try:
             await websocket.close()
         except RuntimeError:
@@ -253,9 +273,14 @@ async def check_ip_ws():
 @app.websocket(f"{probe_url}/channels/<string:probe_id>/<int:connect_type>")
 async def heartbeat(probe_id, connect_type):
     try:
-        await jwt_verification(request=websocket)
-        if probe_id is None or isinstance(probe_id, str) is False or probe_id.strip() == "":
-            await ip_blocker(conn_obj=websocket, auto_ban=True)
+        token = websocket.args.get('token')
+        if not token:
+            await ip_blocker(conn_obj=websocket)
+            await websocket.close()
+
+        await ws_jwt_verification(api_token=token)
+        if probe_id is None or probe_id.strip() == "":
+            await ip_blocker(conn_obj=websocket)
             await websocket.close()
 
         if await cl_data_db.get_all_data(match=f"*{probe_id}*", cnfrm=True) is False:
@@ -295,7 +320,6 @@ async def heartbeat(probe_id, connect_type):
         if probe_id and (probe_id in connected_probes) and connect_type == 1:
             asyncio.ensure_future(_receive_probe())
         await websocket.accept()
-
         try:
             async for message in  Broker(connected_probes[probe_id]['broker']).subscribe():
                 await websocket.send(message)
@@ -322,9 +346,8 @@ async def heartbeat(probe_id, connect_type):
 @app.websocket(f"{main_url}/channels/users")
 async def users():   
     try:
-        await jwt_verification(request=websocket)
+        await ws_jwt_verification(request=websocket)
         await websocket.accept()
-        asyncio.ensure_future(_receive_user())
         async for message in broker.subscribe():
             await websocket.send(message)
     except Exception as e:
@@ -530,7 +553,7 @@ async def prbinit():
     if not api_key:
         await ip_blocker(conn_obj=request)
         abort(401)
-    api_data_dict = await jwt_verification(request=request, api_key=api_key)
+    api_data_dict, _ = await jwt_verification(request=request, api_key=api_key)
     api_jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
     api_rand = api_data_dict.get(f'{api_name}_rand')
     api_id = api_data_dict.get(f'{api_name}_id')
@@ -547,7 +570,11 @@ async def prbinit():
   
 @app.route(f'{probe_url}/enroll', methods=['POST'])
 async def prbenroll():
-    await jwt_verification(request=request)
+    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
+    if not api_key:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    await jwt_verification(request=request, api_key=api_key)
     site = request.args.get('site')
     if not site:
         site = 'default'
@@ -596,7 +623,11 @@ async def prbdelete():
 
 @app.route(f'{probe_url}/ingest', methods=['POST'])
 async def prbingest():
-    await jwt_verification(request=request)    
+    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
+    if not api_key:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    await jwt_verification(request=request, api_key=api_key)    
     data = await request.get_json()
     if data is None:
         return jsonify(), 400
@@ -612,7 +643,11 @@ async def prbingest():
 
 @app.route(f'{probe_url}/flow/new', methods=['POST'])
 async def prbflow():
-    await jwt_verification(request=request)
+    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
+    if not api_key:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    await jwt_verification(request=request, api_key=api_key)
     data = await request.get_json()
     if not data:
         await ip_blocker(conn_obj=request)

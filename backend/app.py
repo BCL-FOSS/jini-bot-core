@@ -249,7 +249,6 @@ async def check_ip_ws():
 @user_login_required
 async def heartbeat(probe_id, connect_type):
     global connected_probes
-    
     try:
         if probe_id is None or isinstance(probe_id, str) is False or probe_id.strip() == "":
             await ip_blocker(conn_obj=websocket, auto_ban=True)

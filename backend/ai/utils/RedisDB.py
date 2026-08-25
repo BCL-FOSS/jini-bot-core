@@ -118,10 +118,10 @@ class RedisDB:
                     if isinstance(pattern, str):
                         matching_keys = [key for key in self.redis_conn.scan_iter(match=pattern)]
                         if matching_keys:
-                            json_data = await self.redis_conn.json().mget(matching_keys, path)
-                            result = dict(zip(matching_keys, json_data))
+                            result = await self.redis_conn.json().mget(keys=matching_keys, path=path)
+                            #result = dict(zip(matching_keys, json_data))
                     else:
-                        result = await self.redis_conn.json().mget(pattern, path)
+                        result = await self.redis_conn.json().mget(keys=pattern, path=path)
             case 'd':
                 result=await self.redis_conn.json().delete(keys=keys[0], path=path)
         await self.redis_conn.close()

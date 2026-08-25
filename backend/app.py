@@ -339,10 +339,6 @@ async def users():
         logger.error(f"JWT invalid: {e}")
         await ip_blocker(conn_obj=websocket)
         logger.error(InvalidTokenError)
-    finally:
-        if id and id in auth_ping_counter:
-            auth_ping_counter.pop(id)
-            logger.debug(f"Session {id} removed from auth ping counter on disconnect")
 
 @app.route(f'{main_url}/register', methods=['POST'])
 async def register():
@@ -523,8 +519,8 @@ async def flow():
         await asyncio.sleep(1)
         logger.info(f"Cron job added: {scheduled_job}")
         data['comment'] = job_comment
-        if await cl_data_db.json_obj_mgr(task='ms', update_data=[(data['prb_id'], f"$.flows.{data['id']}", data)]) is None:
-            return jsonify(), 200
+        await cl_data_db.json_obj_mgr(task='ms', update_data=[(data['prb_id'], f"$.flows.{data['id']}", data)])
+        return jsonify(), 200
     else:
         return jsonify(), 400
  

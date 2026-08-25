@@ -107,19 +107,21 @@ class RedisDB:
         finally:
             await self.redis_conn.close()
 
-    async def json_obj_mgr(self, task: str, update_data: List[tuple]=None, data_name:str=None, new_data: dict=None, keys: List[str]=None, path: str = '$', pattern = "prb:*"):
+    async def json_obj_mgr(self, task: str, save_data: List[tuple]=None, keys: List[str]=None, path: str = '$', pattern: str | List[str] = None):
         await self.connect_db()
         result=None
         match task:
             case 's':
-                result=await self.redis_conn.json().set(data_name, "$", new_data)
-            case 'ms':
-                result=await self.redis_conn.json().mset(update_data)
+                result=await self.redis_conn.json().mset(save_data)
             case 'g':
-                matching_keys = await list(self.redis_conn.scan_iter(match=pattern))
-                if matching_keys:
-                    json_data = self.redis_conn.json().mget(matching_keys, '$')
-                result = dict(zip(matching_keys, json_data))
+                if pattern is not None:
+                    if isinstance(pattern, str):
+                        matching_keys = await list(self.redis_conn.scan_iter(match=pattern))
+                        if matching_keys:
+                            json_data = await self.redis_conn.json().mget(matching_keys, path)
+                            result = dict(zip(matching_keys, json_data))
+                    else:
+                        result = await self.redis_conn.json().mget(pattern, path)
             case 'd':
                 result=await self.redis_conn.json().delete(keys=keys[0], path=path)
         await self.redis_conn.close()

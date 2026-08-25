@@ -428,183 +428,6 @@ async def logout(auth_id):
     if await cl_sess_db.del_obj(key=auth_id) is not None:
         client_auth.logout_user()
         return jsonify(), 200
-    
-@app.route(f'{probe_url}/data', methods=['POST'])
-@user_login_required
-async def prbdata():
-    data = await request.get_json()
-    if not data:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    probes=None
-    if data['pattern']:
-        probes = await cl_data_db.json_obj_mgr(task='g', pattern=data['pattern'])
-    else:
-        probes = await cl_data_db.json_obj_mgr(task='g')
-    return jsonify(probes), 200
- 
-@app.route(f'{probe_url}/init', methods=['GET'])
-async def prbinit():
-    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
-    if not api_key:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    api_data_dict = await jwt_verification(request=request, api_key=api_key)
-    api_jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
-    api_rand = api_data_dict.get(f'{api_name}_rand')
-    api_id = api_data_dict.get(f'{api_name}_id')
-    jwt_token = util_obj.generate_ephemeral_token(id=api_id, secret_key=api_jwt_key, rand=api_rand, type='prb')
-    response = Response(response='Probe Token Success', status=200)  
-    response.set_cookie(
-            key='access_token',
-            value=jwt_token,
-            httponly=True,
-            secure=True,
-            samesite="Strict",
-            max_age=3600  # 1 hour, adjust as needed
-        )
-    return response
-  
-@app.route(f'{probe_url}/enroll', methods=['POST'])
-async def prbenroll():
-    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
-    site = request.args.get('site')
-    if not api_key:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    if not site:
-        site = 'default'
-    await jwt_verification(request=request, api_key=api_key)
-    adopted_probe_data = await request.get_json()
-    adopted_probe_data['devices']={}
-    adopted_probe_data['trace_results']={}
-    adopted_probe_data['perf_results']={}
-    adopted_probe_data['scan_results']={}
-    adopted_probe_data['pcap_results']={}
-    adopted_probe_data['alerts']={}
-    adopted_probe_data['chats']={}
-    adopted_probe_data['tasks']={}
-    adopted_probe_data['flows']={}
-    adopted_probe_data['tux_count']=0
-    adopted_probe_data['win_count']=0
-    adopted_probe_data['android_count']=0
-    adopted_probe_data['iphone_count']=0
-    if await cl_data_db.json_obj_mgr(task='s', new_data=adopted_probe_data, data_name=adopted_probe_data['prb_id']) is not None:
-        return jsonify(), 200
-    else:
-        return jsonify(), 400
-    
-@app.route(f'{probe_url}/delete', methods=['POST'])
-@user_login_required
-async def prbdelete():
-    data = await request.get_json() 
-    id = data['id']
-    result = await cl_data_db.del_obj(key=id)
-    if result is None:
-        return jsonify(), 400
-    return jsonify(), 200
-
-@app.route(f'{probe_url}/ingest', methods=['POST'])
-async def prbingest():
-    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
-    await jwt_verification(request=request, api_key=api_key)
-    data = await request.get_json()
-    if data is None:
-        return jsonify(), 400
-    payload = {
-        'documents': data['documents'],       
-    }
-    ingest_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-
-    if ingest_resp == 200:
-        return jsonify(), 200
-    else:
-        return jsonify(), 400
-
-@app.route(f'{probe_url}/analysis', methods=['POST'])
-async def prbanalysis():
-    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
-    if not api_key:
-        await ip_blocker(conn_obj=request)
-        abort(401)
-    await jwt_verification(request=request, api_key=api_key)
-    data = await request.get_json()
-    if data is None:
-        return jsonify(), 400
-
-    anlys_payload = {
-        'content': data['content'],
-        'metadata': data['metadata'],
-        'available_tools': data['tool_instructions'],
-        'detect_type': 1,
-        'prompt': data['prompt']
-    }
-    anlys_status, anlys_resp = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch", data=anlys_payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))  
-    
-    if anlys_status == 200:
-        prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
-        prim_contact_dict = next(iter(prim_contact.values()))
-        html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
-                                                    <p>Hello,</p>
-                                                    <p>{os.getenv('JINIBOT_NAME')}'s {data['flow_name']} Analysis:</p>
-                                                    <p>{anlys_resp}</p>
-                    
-                            
-                                                    </div>"""
-        email_params = {'sender': {'name': f'{os.getenv('JINIBOT_NAME')}', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                                                        'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('eml')}],
-                                                        'subject': f"{os.getenv('JINIBOT_NAME')} {data['flow_name']} Analysis Report",
-                                                        'hmtl_content': html_snippet }
-                    
-        email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
-        email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
-        if email_code == 0:
-                                logger.info(f'Flow {data['flow_name']} complete')
-                                return
-        return jsonify(), 200
-
-@app.route(f'{main_url}/flows', defaults={'task': None}, methods=['POST'])            
-@app.route(f'{main_url}/flows/<string:task>', methods=['POST'])
-@user_login_required
-async def flow(task):
-    data = await request.get_json()
-    if task is None or data is None:
-        await ip_blocker(conn_obj=request)
-        return jsonify(), 400
-    
-    match task:
-        case 'load':
-            if await cl_data_db.get_all_data(match=f'*{data['id']}*', cnfrm=True) is True:
-                flow_data = await cl_data_db.get_all_data(match=f'*{data['id']}*')
-                flow_data_dict = next(iter(flow_data.values()))
-                return jsonify(flow_data_dict), 200
-            else:
-                return jsonify(), 400
-        case 'save': 
-            if data['id'] == 'default':
-                data['id'] = f"flow:{data['name']}:{str(uuid.uuid4())}" 
-            job1 = None
-            now = datetime.now(tz=timezone.utc).isoformat()
-            job_comment=f"auto_job_{data['name']}_{now}"
-            task_command = ""
-            script_path = os.path.join(cwd, 'utils', 'RemoteFlowRunner.py')
-            task_command = f"python3 {script_path} -f {data['flow']} -n {data['name']}"
-            job1 = await run_sync(lambda: cron.new(command=task_command, comment=job_comment))()
-            scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data['schedule']))()
-            if await run_sync(scheduled_job.is_valid())():
-                await run_sync(cron.write())()
-                await asyncio.sleep(1)
-                logger.info(f"Cron job added: {scheduled_job}")
-                if await cl_data_db.upload_db_data(id=data['id'], data=data) > 0:
-                    return jsonify(), 200
-            else:
-                return jsonify(), 400
-        case 'all':
-            all_flows = await cl_data_db.get_all_data(match=f'flow:*')
-            parsed_flows = next(iter(all_flows.values()))
-            return jsonify(parsed_flows), 200
-        case _:
-            pass
 
 @app.route(f'{main_url}/reset', methods=['GET'])
 @user_login_required
@@ -646,7 +469,132 @@ async def reset():
             return jsonify(), 400
     else:
         return jsonify(), 400
+
+@app.route(f'{main_url}/flows/new', methods=['POST'])
+@user_login_required
+async def flow():
+    data = await request.get_json()
+    if data is None:
+        await ip_blocker(conn_obj=request)
+        return jsonify(), 400
+    if data['id'] == 'default':
+        data['id'] = f"flow:{data['name']}:{str(uuid.uuid4())}" 
+    job1 = None
+    now = datetime.now(tz=timezone.utc).isoformat()
+    job_comment=f"auto_job_{data['name']}_{now}"
+    task_command = ""
+    script_path = os.path.join(cwd, 'utils', 'RemoteFlowRunner.py')
+    task_command = f"python3 {script_path} -f {data['flow']} -n {data['name']}"
+    job1 = await run_sync(lambda: cron.new(command=task_command, comment=job_comment))()
+    scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data['schedule']))()
+    if await run_sync(scheduled_job.is_valid())():
+        await run_sync(cron.write())()
+        await asyncio.sleep(1)
+        logger.info(f"Cron job added: {scheduled_job}")
+        data['comment'] = job_comment
+        if await cl_data_db.json_obj_mgr(task='ms', update_data=[(data['prb_id'], f"$.flows.{data['id']}", data)]) is None:
+            return jsonify(), 200
+    else:
+        return jsonify(), 400
+ 
+@app.route(f'{probe_url}/init', methods=['GET'])
+async def prbinit():
+    api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
+    if not api_key:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    api_data_dict = await jwt_verification(request=request, api_key=api_key)
+    api_jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
+    api_rand = api_data_dict.get(f'{api_name}_rand')
+    api_id = api_data_dict.get(f'{api_name}_id')
+    jwt_token = util_obj.generate_ephemeral_token(id=api_id, secret_key=api_jwt_key, rand=api_rand, type='prb')
+    response = Response(response='Probe Token Success', status=200)  
+    response.set_cookie(
+            key='access_token',
+            value=jwt_token,
+            httponly=False,
+            secure=False,
+            max_age=None
+        )
+    return response
+  
+@app.route(f'{probe_url}/enroll', methods=['POST'])
+async def prbenroll():
+    await jwt_verification(request=request)
+    site = request.args.get('site')
+    if not site:
+        site = 'default'
+    adopted_probe_data = await request.get_json()
+    adopted_probe_data['devices']={}
+    adopted_probe_data['trace_results']={}
+    adopted_probe_data['perf_results']={}
+    adopted_probe_data['scan_results']={}
+    adopted_probe_data['pcap_results']={}
+    adopted_probe_data['alerts']={}
+    adopted_probe_data['chats']={}
+    adopted_probe_data['tasks']={}
+    adopted_probe_data['flows']={}
+    adopted_probe_data['tux_count']=0
+    adopted_probe_data['win_count']=0
+    adopted_probe_data['android_count']=0
+    adopted_probe_data['iphone_count']=0
+    if await cl_data_db.json_obj_mgr(task='s', save_data=[(adopted_probe_data['prb_id'], f"$", adopted_probe_data)]) is not None:
+        return jsonify(), 200
+    else:
+        return jsonify(), 400
+
+@app.route(f'{probe_url}/get', methods=['POST'])
+@user_login_required
+async def prbdata():
+    data = await request.get_json()
+    if not data:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    probes=None
+    if isinstance(data['pattern'], str):
+        probes = await cl_data_db.json_obj_mgr(task='g', pattern=data['pattern'], path=data['path'])
+    else:
+        probes = await cl_data_db.json_obj_mgr(task='g', path=data['path'], pattern=json.loads(data['pattern']))
+    return jsonify(probes), 200
     
+@app.route(f'{probe_url}/delete', methods=['POST'])
+@user_login_required
+async def prbdelete():
+    data = await request.get_json() 
+    id = data['id']
+    result = await cl_data_db.del_obj(key=id)
+    if result is None:
+        return jsonify(), 400
+    return jsonify(), 200
+
+@app.route(f'{probe_url}/ingest', methods=['POST'])
+async def prbingest():
+    await jwt_verification(request=request)    
+    data = await request.get_json()
+    if data is None:
+        return jsonify(), 400
+    payload = {
+        'documents': data['documents'],       
+    }
+    ingest_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+
+    if ingest_resp == 200:
+        return jsonify(), 200
+    else:
+        return jsonify(), 400
+
+@app.route(f'{probe_url}/flow/new', methods=['POST'])
+async def prbflow():
+    await jwt_verification(request=request)
+    data = await request.get_json()
+    if not data:
+        await ip_blocker(conn_obj=request)
+        abort(401)
+    if data['id'] == 'default':
+        data['id'] = f"flow:{data['name']}:{str(uuid.uuid4())}" 
+    await cl_data_db.json_obj_mgr(task='s', save_data=[(data['prb_id'], f"$.flows.{data['id']}", data)])
+    return jsonify(), 200
+
 @app.errorhandler(Unauthorized)
 async def unauthorized():
     await ip_blocker(conn_obj=request)

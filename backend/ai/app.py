@@ -4,9 +4,11 @@ import uuid
 from quart import request, jsonify
 from init_app import app, logger, headers, rag_engine, call_mcp, fetch_mcp_tools, chat_with_ollama, REQUIRED_OUT_OF_SCOPE_MSG
 import uuid
-from backend.init_app import cl_data_db
+from backend.init_app import cl_data_db, cl_auth_db, util_obj
+from backend.app import email_script_path
 from datetime import datetime, timezone
 from quart.utils import run_sync
+import os
 
 @app.before_serving
 async def db_startup():
@@ -345,9 +347,9 @@ async def ingest_batch():
             case str() as s if s.startswith('test_'):
                 new_tool_outputs.append((prb_id, f"$.trace_results.{doc_id}", doc['parsed_output']))
         
-    if await cl_data_db.json_obj_mgr(task='ms', update_data=new_tool_outputs) is not None:
+    if await cl_data_db.json_obj_mgr(task='s', save_data=new_tool_outputs) is not None:
         logger.info('upload complete')
-        
+
     count = await rag_engine.ingest_batch(processed_docs)
 
     if count is None or count == 0:
@@ -427,4 +429,18 @@ async def analyze_batch():
     if not batch_content or not metadata or not detect_type:
         return jsonify(), 400
     action_decision = await rag_engine.batch_content_processing(content=batch_content, metadata=json.loads(metadata), available_tools=available_tools, detect_type=detect_type, user_prompt=prompt)
+    prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
+    prim_contact_dict = next(iter(prim_contact.values()))
+    html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
+                                                        <p>Hello,</p>
+                                                        <p>{os.getenv('JINIBOT_NAME')}'s {data['flow_name']} Analysis:</p>
+                                                        <p>{action_decision}</p>
+                                                        </div>"""
+    email_params = {'sender': {'name': f'{os.getenv('JINIBOT_NAME')}', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+                                                            'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('eml')}],
+                                                            'subject': f"{os.getenv('JINIBOT_NAME')} {data['flow_name']} Analysis Report",
+                                                            'hmtl_content': html_snippet }
+                        
+    email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
+    email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
     return jsonify(action_decision), 200

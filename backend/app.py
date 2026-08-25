@@ -4,7 +4,7 @@ from utils.broker import Broker
 from quart import jsonify
 from quart.utils import run_sync
 import json
-from init_app import app, logger, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, load_network_diagnostic_prompt, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, probe_url, init_core_api, main_url, current_client, client_auth, Client
+from init_app import app, logger, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, probe_url, init_core_api, main_url, current_client, client_auth, Client
 import os
 from quart import (websocket, abort, jsonify)
 import jwt
@@ -41,7 +41,6 @@ async def retrieve_user_sess_data(sess_id):
     return data
 
 async def ip_blocker(conn_obj: Request | Websocket, auto_ban: bool = False, check_if_allowed: bool = False):
-    global auth_attempts
     if check_if_allowed is True:
         if await ip_ban_db.get_all_data(match=f"*blocked_ip:{conn_obj.access_route[-1]}*", cnfrm=True) is True:
             logger.warning(f"IP {conn_obj.access_route[-1]} is not in allowed list, blocking access.")
@@ -102,7 +101,7 @@ async def jwt_verification(request: Request | Websocket, api_key: str = None):
             abort(401)
         token = auth_header.split(" ")[1]
         auth_check = False
-        api_data = await cl_data_db.get_all_data(match=f"{api_name}:dta:*")
+        api_data = await cl_auth_db.get_all_data(match=f"{api_name}:dta:*")
         if api_data is None:
             await ip_blocker(conn_obj=request)
             abort(401)
@@ -163,6 +162,14 @@ async def _receive_probe() -> None:
                     pass
         else:
             pass
+
+
+async def _receive_user() -> None:
+    while True:
+        message = await websocket.receive()
+        logger.debug(message)
+        message = json.loads(message)
+        await broker.publish(message=json.dumps(message))
 
 async def session_watchdog(sess_id: str, check_interval: float = 5.0):
     logger.info(f"Starting session watchdog for {sess_id}")
@@ -226,9 +233,7 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
             logger.exception(f"Error in session_watchdog for {sess_id}: {e}")
 
 @app.before_serving
-async def startup():
-    global NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD
-    NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = await run_sync(load_network_diagnostic_prompt())    
+async def startup(): 
     await check_for_utils()
     await init_core_api()
     
@@ -246,10 +251,9 @@ async def check_ip_ws():
             return None
 
 @app.websocket(f"{probe_url}/channels/<string:probe_id>/<int:connect_type>")
-@user_login_required
 async def heartbeat(probe_id, connect_type):
-    global connected_probes
     try:
+        await jwt_verification(request=websocket)
         if probe_id is None or isinstance(probe_id, str) is False or probe_id.strip() == "":
             await ip_blocker(conn_obj=websocket, auto_ban=True)
             await websocket.close()
@@ -314,6 +318,31 @@ async def heartbeat(probe_id, connect_type):
             except Exception as e:
                 logger.error(f"Error cancelling monitor task: {e}")
                 pass
+
+@app.websocket(f"{main_url}/channels/users")
+async def users():   
+    try:
+        await jwt_verification(request=websocket)
+        await websocket.accept()
+        asyncio.ensure_future(_receive_user())
+        async for message in broker.subscribe():
+            await websocket.send(message)
+    except Exception as e:
+        logger.error(e)
+    except asyncio.CancelledError as e:
+        logger.error(e)
+    except ExpiredSignatureError:
+        logger.warning("JWT expired, need to refresh token")
+        await ip_blocker(conn_obj=websocket)
+        logger.error(ExpiredSignatureError)
+    except InvalidTokenError as e:
+        logger.error(f"JWT invalid: {e}")
+        await ip_blocker(conn_obj=websocket)
+        logger.error(InvalidTokenError)
+    finally:
+        if id and id in auth_ping_counter:
+            auth_ping_counter.pop(id)
+            logger.debug(f"Session {id} removed from auth ping counter on disconnect")
 
 @app.route(f'{main_url}/register', methods=['POST'])
 async def register():

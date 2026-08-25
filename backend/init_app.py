@@ -189,16 +189,15 @@ def schedule_cronjob(job1: CronTab, core_act_data: dict):
     return job1
 
 async def init_core_api():
-    if await cl_data_db.get_all_data(match=f"*{api_name}*", cnfrm=True) is False:
+    if await cl_auth_db.get_all_data(match=f"*{api_name}*", cnfrm=True) is False:
         api_id = util_obj.key_gen(size=10) 
         new_api_key = str(uuid.uuid4())
         updated_api_data = {
             api_name: bcrypt.hashpw(new_api_key, bcrypt.gensalt()),
             f"{api_name}_id": api_id,
             f"{api_name}_rand": secrets.token_urlsafe(500),
-            f"{api_name}_jwt_secret": secrets.token_urlsafe(500)
+            f"{api_name}_jwt_secret": secrets.token_urlsafe(500),
         }
-            
         if await cl_data_db.upload_db_data(id=f"{api_name}:dta:{api_id}", data=updated_api_data) > 0:
             logger.info(f"""ATTENTION: Your API Key for Jini Net Assistant is below. 
                     Please copy and store in a password manager of your choice for safe keeping. This willl not be displayed again.\n

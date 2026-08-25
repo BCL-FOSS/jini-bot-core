@@ -110,7 +110,7 @@ async def jwt_verification(request: Request | Websocket, api_key: str = None):
         if token:
             jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
             decoded_token = jwt.decode(jwt=token, key=jwt_key , algorithms=["HS256"])
-            if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand') or bcrypt.checkpw(api_key,api_data_dict.get(api_name)) is False:
+            if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand') or bcrypt.checkpw(api_key, api_data_dict.get(api_name)) is False:
                 await ip_blocker(conn_obj=request)
                 abort(401)
             else:
@@ -326,7 +326,7 @@ async def register():
     if auth_check is True:
         user_data = await request.get_json()
         username = str(user_data['uname']).replace(" ", "").lower()
-        password_hash = bcrypt.hashpw(user_data['pass'], bcrypt.gensalt())
+        password_hash = bcrypt.hashpw(str(user_data['pass']).encode(), bcrypt.gensalt())
         logger.info(f"Registering user: {username}")
         user_nmp, user_id = util_obj.gen_user(username=username)
         user_obj = {
@@ -361,6 +361,8 @@ async def register():
                 add_contact_code, add_contact_output, add_contact_error = await util_obj.run_shell_cmd(cmd=add_contact_command)
                 logger.info(f"code: {add_contact_code}\noutput: {add_contact_output}\nerror: {add_contact_error}")
                 return jsonify(), 200
+        else:
+            return jsonify(), 400
 
 @app.route(f'{main_url}/login', methods=['POST'])
 async def login():
@@ -395,13 +397,13 @@ async def login():
                     }
                 return Unauthorized()
         
-            if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] >= os.getenv('MAX_AUTH_ATTEMPTS'):
+            if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] >= int(os.getenv('MAX_AUTH_ATTEMPTS')):
                 now = datetime.now(tz=timezone.utc)
                 auth_ping_counter[request.access_route[-1]]['timestamp']=now
                 await ip_blocker(conn_obj=request, auto_ban=True)
                 return Unauthorized()
 
-            if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] < os.getenv('MAX_AUTH_ATTEMPTS'):
+            if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] < int(os.getenv('MAX_AUTH_ATTEMPTS')):
                 now = datetime.now(tz=timezone.utc)
                 auth_ping_counter[request.access_route[-1]]['fail_count']+=1
                 auth_ping_counter[request.access_route[-1]]['timestamp']=now
@@ -413,13 +415,14 @@ async def login():
         client_auth.login_user(Client(auth_id=session_id, action=Action.WRITE))
         sub_dict.pop('pwd')
         auth_token = client_auth.dump_token(auth_id=session_id, app=app)
-        sub_dict['auth_token'] = bcrypt.hashpw(password=auth_token, salt=bcrypt.gensalt())
+        sub_dict['auth_token'] = bcrypt.hashpw(password=auth_token.encode(), salt=bcrypt.gensalt())
         if await cl_sess_db.upload_db_data(id=session_id, data=sub_dict) > 0:
-            return jsonify({'token': auth_token})
+            return jsonify({'token': auth_token, 'session_id': session_id})
 
 @app.route(f'{main_url}/logout/<string:auth_id>', methods=['GET'])
 @user_login_required
 async def logout(auth_id):
+    
     if await cl_sess_db.get_all_data(match=f'{auth_id}', cnfrm=True) is False:
             await ip_blocker()
             return Unauthorized()
@@ -439,7 +442,7 @@ async def reset():
         api_id = util_obj.key_gen(size=10) 
         new_api_key = str(uuid.uuid4())
         updated_api_data = {
-            api_name: bcrypt.hashpw(new_api_key, bcrypt.gensalt()),
+            api_name: bcrypt.hashpw(new_api_key.encode(), bcrypt.gensalt()),
             f"{api_name}_id": api_id,
             f"{api_name}_rand": secrets.token_urlsafe(500),
             f"{api_name}_jwt_secret": secrets.token_urlsafe(500)

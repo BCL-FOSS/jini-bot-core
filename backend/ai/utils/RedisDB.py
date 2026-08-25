@@ -116,7 +116,7 @@ class RedisDB:
             case 'g':
                 if pattern is not None:
                     if isinstance(pattern, str):
-                        matching_keys = await list(self.redis_conn.scan_iter(match=pattern))
+                        matching_keys = [key for key in self.redis_conn.scan_iter(match=pattern)]
                         if matching_keys:
                             json_data = await self.redis_conn.json().mget(matching_keys, path)
                             result = dict(zip(matching_keys, json_data))

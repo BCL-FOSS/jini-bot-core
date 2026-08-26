@@ -17,6 +17,9 @@ app = Quart(__name__)
 OLLAMA_URL = "http://ollama:11434/api/chat"
 cl_data_db = RedisDB(hostname=os.environ.get('CLIENT_DATA_DB'),
                                                     port=os.environ.get('CLIENT_DATA_DB_PORT'))
+web_client = httpx.AsyncClient()
+cl_data_db = RedisDB(hostname=os.getenv('CLIENT_DATA_DB'),
+                    port=os.getenv('CLIENT_DATA_DB_PORT'))
 REQUIRED_OUT_OF_SCOPE_MSG = "Please provide a question or request related to network administration or the available MCP tools."
 # Initialize RAG Engine
 rag_engine = RAGEngine(
@@ -72,7 +75,7 @@ def normalize_arguments(args):
         logger.warning(f"Unexpected arguments format: {args}")
         return {}
 
-async def call_mcp(server_url: str, tool_call: dict, headers: Dict[str, str]):
+async def call_mcp(server_url: str, tool_call: dict, headers: Dict[str, str], conn_obj: httpx.AsyncClient):
     """
     Call the FastMCP server tool with sanitized arguments.
     """
@@ -80,7 +83,7 @@ async def call_mcp(server_url: str, tool_call: dict, headers: Dict[str, str]):
     args = normalize_arguments(tool_call.get("arguments", {}))
     logger.info(f"Calling MCP tool `{tool_name}` with arguments: {args}")
 
-    async with httpx.AsyncClient() as client:
+    async with conn_obj as client:
         # Initialize MCP session
         resp = await client.post(server_url, json=init_payload, headers=headers, timeout=int(os.environ.get('REQUEST_TIMEOUT')))
         
@@ -115,11 +118,11 @@ async def call_mcp(server_url: str, tool_call: dict, headers: Dict[str, str]):
             answer_data = json.loads(text)
             return answer_data
 
-async def fetch_mcp_tools(server_url: str, headers: Dict[str, str]) -> list:
+async def fetch_mcp_tools(server_url: str, headers: Dict[str, str], conn_obj: httpx.AsyncClient) -> list:
     """
     Fetch available tool schemas (inputs + returns) from MCP server manifest.
     """
-    async with httpx.AsyncClient() as client:
+    async with conn_obj as client:
         resp = await client.post(server_url, json=init_payload, headers=headers, timeout=int(os.environ.get('REQUEST_TIMEOUT')))
       
         session_id = resp.headers.get('mcp-session-id')
@@ -144,8 +147,8 @@ async def fetch_mcp_tools(server_url: str, headers: Dict[str, str]) -> list:
             logger.info(f"Available tools: {tool_data['tools']}")
             return tool_data['tools']
         
-async def chat_with_ollama(conversation: list, model: str) -> str:
-    async with httpx.AsyncClient() as client:
+async def chat_with_ollama(conversation: list, model: str, conn_obj: httpx.AsyncClient) -> str:
+    async with conn_obj as client:
         resp = await client.post(
             OLLAMA_URL,
             json={"model": model, "messages": conversation, "stream": False},

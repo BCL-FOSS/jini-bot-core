@@ -2,12 +2,9 @@ import re
 import json
 import uuid
 from quart import request, jsonify
-from init_app import app, logger, headers, rag_engine, call_mcp, fetch_mcp_tools, chat_with_ollama, REQUIRED_OUT_OF_SCOPE_MSG
+from init_app import app, logger, headers, rag_engine, call_mcp, fetch_mcp_tools, chat_with_ollama, REQUIRED_OUT_OF_SCOPE_MSG, web_client, cl_data_db
 import uuid
-from backend.init_app import cl_data_db, cl_auth_db, util_obj
 from datetime import datetime, timezone
-from quart.utils import run_sync
-import os
 
 @app.before_serving
 async def db_startup():
@@ -37,7 +34,7 @@ async def chat():
         tool_schemas = []
         for t in tools:
             if t.get("type") == "mcp":
-                mcp_tools = await fetch_mcp_tools(server_url=t["server_url"])
+                mcp_tools = await fetch_mcp_tools(server_url=t["server_url"], conn_obj=web_client)
                 if mcp_tools is None:
                     return {'Error': f"Failed to fetch tools from {t['server_url']}"}
                 for tool in mcp_tools:
@@ -75,7 +72,7 @@ async def chat():
         {"role": "user", "content": user_input},
     ]
 
-    ollama_out_clean = await chat_with_ollama(conversation, model)
+    ollama_out_clean = await chat_with_ollama(conversation=conversation, model=model, conn_obj=web_client)
 
     if f"I am a locally hosted, open source {model} model running on ollama.".lower() in ollama_out_clean.lower():
         logger.info(tools[0].get('server_url'))
@@ -136,7 +133,7 @@ async def chat():
             )
         })
 
-        return await chat_with_ollama(conversation, model)
+        return await chat_with_ollama(conversation=conversation, model=model, conn_obj=web_client)
 
     # If parsed is bad or arguments are schema instead of values
     if not (isinstance(parsed, dict) and "name" in parsed and is_valid_arguments(parsed)) and not (isinstance(parsed, list)):
@@ -195,7 +192,7 @@ async def chat():
 
             if server_url:
                 try:
-                    result = await call_mcp(server_url=server_url, tool_call=tc)
+                    result = await call_mcp(server_url=server_url, tool_call=tc, conn_obj=web_client)
                     tool_outputs.append({"tool": tool_name, "server": server_label, "server_url": server_url, "output": result})
                 except Exception as e:
                     logger.exception(f"Error calling MCP tool {tool_name} on {server_url}: {e}")

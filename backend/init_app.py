@@ -20,6 +20,7 @@ from accounts.Admin import Admin
 from werkzeug.local import LocalProxy
 from quart_auth import (
     QuartAuth)
+import httpx
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('passlib').setLevel(logging.ERROR)
@@ -91,7 +92,7 @@ ip_ban_db = RedisDB(hostname=os.getenv('IP_BAN_DB'),
 ws_rate_limiter = WSRateLimiter(redis_host=os.getenv('RATE_LIMIT_DB'), 
                                 redis_port=os.getenv('RATE_LIMIT_DB_PORT'))
 comm_mgr = CommMgr()
-
+web_client = httpx.AsyncClient()
 main_url="/v1/api/core"
 probe_url=f"{main_url}/probes"
 REQUIRED_OUT_OF_SCOPE_MSG = "Please provide a question or request related to network administration or the available MCP tools."

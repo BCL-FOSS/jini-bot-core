@@ -2,7 +2,7 @@ import redis.asyncio as redis
 import json
 import logging
 from typing import List
-from backend.init_app import logger
+from init_app import logger
 
 class RedisDB:
    

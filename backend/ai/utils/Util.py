@@ -144,8 +144,8 @@ class Util:
         res = base + timedelta(seconds=add_seconds)
         return res.replace(microsecond=0)
 
-    async def make_http_request(self, headers: dict, url: str, data: dict, timeout: int = 10):
-        async with httpx.AsyncClient() as client:                  
+    async def make_http_request(self, conn_obj: httpx.AsyncClient, headers: dict, url: str, data: dict, timeout: int = 10):
+        async with conn_obj as client:                  
             exec_resp = await client.post(url, json=data, headers=headers, timeout=timeout)
             if exec_resp.status_code != 200:
                 self.logger.error(f"HTTP request failed with status code {exec_resp.status_code}: {exec_resp.text}")

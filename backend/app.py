@@ -6,7 +6,7 @@ import html
 import shlex
 from quart.utils import run_sync
 import json
-from init_app import app, logger, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, probe_url, init_core_api, main_url, current_client, client_auth, Client
+from init_app import app, logger, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, probe_url, init_core_api, main_url, current_client, client_auth, Client, web_client
 import os
 from quart import (websocket, jsonify)
 import jwt
@@ -261,9 +261,9 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                            'sess_id': sess_id,
                            'id': alert_id
                     }
+                    alert_data = [{'alert_type': '', 'name': '', 'site': '', 'status': 'unresolved', 'timestamp': '', 'id': '', 'prb_id': '', 'ack': 'unseen', 'rslv': 'unresolved', 'msg': '', 'severity': ''}]
 
-                    await Broker(connected_probes[sess_id]['broker']).publish(message=json.dumps(alert_data))
-                    await broker.publish(message=json.dumps(alert_data))
+                    await publish_probe_alerts(prb_id=sess_id, alerts=alert_data)
 
                     if await cl_data_db.json_obj_mgr(task='s', save_data=[(sess_id, f"$.alerts.{str(uuid.uuid4())}")]) is not None:
                         logger.info(f"{sess_id} {alert_data['alert']} processed")
@@ -663,7 +663,6 @@ async def reset():
    
         if await cl_data_db.upload_db_data(id=f"{api_name}:dta:{api_id}", data=updated_api_data) > 0:
             link = cli.create_link(secret=new_api_key, ttl=int(os.environ.get('OTS_TTL')))
-
             html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
                         <p>Hello,</p>
                         <p><strong>umjiniti</strong> API key for 'JiniBot <strong>{os.getenv('JINIBOT_NAME')}</strong> has been reset.</p>
@@ -672,14 +671,8 @@ async def reset():
                         <p>Thank you,<br/>umjiniti Team</p>
 
                         </div>"""
-            email_params = {'sender': {'name': 'umjiniti Admin', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                            'to': [{"name": f"{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}", "email": prim_contact_dict.get('eml')}],
-                            'subject': f"New Jini API Key Generated for {prim_contact_dict.get('eml')}",
-                            'hmtl_content': html_snippet }
-            
-            email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
-            email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
-            return jsonify(), 200
+            if await email_report(subject=f"New Jini API Key Generated for {prim_contact_dict.get('eml')}", body_html=html_snippet) is True:
+                return jsonify(), 200
         else:
             return jsonify(), 400
     else:
@@ -847,7 +840,8 @@ async def prbingest():
         headers={'content-type': 'application/json'},
         url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch",
         data=payload,
-        timeout=int(os.getenv('REQUEST_TIMEOUT'))
+        timeout=int(os.getenv('REQUEST_TIMEOUT')),
+        conn_obj=web_client
     )
     if ingest_resp != 200:
         logger.error(f"Document ingest failed with status {ingest_resp}")
@@ -857,7 +851,8 @@ async def prbingest():
         headers={'content-type': 'application/json'},
         url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch",
         data=data,
-        timeout=int(os.getenv('REQUEST_TIMEOUT'))
+        timeout=int(os.getenv('REQUEST_TIMEOUT')),
+        conn_obj=web_client
     )
     if analysis_resp != 200:
         logger.error(f"Analysis failed with status {analysis_resp}")

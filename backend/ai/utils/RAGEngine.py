@@ -6,7 +6,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Tuple
-from init_app import call_mcp, logger, chat_with_ollama
+from init_app import call_mcp, logger, chat_with_ollama, web_client
 
 class RAGEngine:
     def __init__(
@@ -188,7 +188,7 @@ class RAGEngine:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Context:\n{context}\n\nQuery: {query}"}
         ]
-        response = await chat_with_ollama(conversation=messages, model=self.ollama_model)
+        response = await chat_with_ollama(conversation=messages, model=self.ollama_model, conn_obj=web_client)
         if not response:
             logger.error("LLM analysis failed: No response received")
             return None
@@ -618,7 +618,7 @@ class RAGEngine:
                 tool_name = action.get('tool')
                 params = action.get('params', {})
                 if tool_name:
-                    result = await call_mcp(server_url=self.mcp_server_url, tool_call={"name": tool_name, "arguments": params})
+                    result = await call_mcp(server_url=self.mcp_server_url, tool_call={"name": tool_name, "arguments": params}, conn_obj=web_client)
                     if result is None:
                         logger.error(f"Failed to execute MCP tool: {tool_name} with params: {params}")
                         return None

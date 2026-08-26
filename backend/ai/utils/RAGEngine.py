@@ -2,7 +2,10 @@ import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 import json
-from typing import List, Dict, Any, Optional
+import re
+import uuid
+from datetime import datetime, timezone
+from typing import List, Dict, Any, Optional, Tuple
 from init_app import call_mcp, logger, chat_with_ollama
 
 class RAGEngine:
@@ -254,7 +257,7 @@ class RAGEngine:
         site: str = None,
         prb_id: str = None,
         prb_name: str = None
-    ) -> Dict[str, Any]:
+    ) -> Dict[str, Any] | Tuple[List[Dict[str, Any]], str]:
         
         similar = await self.query_similar(
             content,
@@ -312,17 +315,44 @@ class RAGEngine:
                     )
         
         analysis = await self.analyze_with_llm(context=historical_context, query=anomaly_prompt)
-        
-        # Try to parse JSON response
+
+        if analysis is None:
+            logger.error("Anomaly detection failed: the LLM returned no response")
+            if detect_type == 2:
+                return [], "Analysis unavailable: the language model returned no response."
+            return {
+                "anomaly_data": {
+                    "severity": "UNKNOWN",
+                    "anomalies": ["The language model returned no response"],
+                    "recommendations": []
+                },
+                "similar_patterns_found": similar['count']
+            }
+
+        # detect_type 2 asks the model for a (list of alert objects, report text)
+        # pair, so it needs its own parser rather than the plain JSON path.
+        if detect_type == 2:
+            return self._parse_alert_report(
+                analysis,
+                defaults={
+                    'site': site,
+                    'prb_id': prb_id,
+                    'name': prb_name,
+                    'flow': metadata.get('flow') if metadata else None
+                }
+            )
+
+        # detect_type 1 asks for a formatted text report; there is no JSON to
+        # find, so skip the parse instead of failing into the fallback branch.
+        if detect_type == 1:
+            return {
+                "anomaly_data": {"report": analysis},
+                "similar_patterns_found": similar['count']
+            }
+
         try:
-            # Extract JSON from markdown code blocks if present
-            if "```json" in analysis:
-                analysis = analysis.split("```json")[1].split("```")[0].strip()
-            elif "```" in analysis:
-                analysis = analysis.split("```")[1].split("```")[0].strip()
-            
-            anomaly_data = json.loads(analysis)
-        except json.JSONDecodeError:
+            anomaly_data = json.loads(self._strip_code_fences(analysis))
+        except (json.JSONDecodeError, TypeError):
             # Fallback to text analysis
             anomaly_data = {
                 "severity": "UNKNOWN",
@@ -331,20 +361,157 @@ class RAGEngine:
                 "raw_analysis": analysis
             }
 
-        if detect_type == 1:
-            return {
-                "anomaly_data": anomaly_data,
-                "similar_patterns_found": similar['count']
-            }
-
-        if detect_type == 2:
-            pass
-        
         return {
             "anomaly_data": anomaly_data,
             "similar_patterns_found": similar['count']
         }
-    
+
+    @staticmethod
+    def _strip_code_fences(text: str) -> str:
+        """Return the contents of the first fenced block, or the text as-is."""
+        if not isinstance(text, str):
+            return text
+        if "```json" in text:
+            return text.split("```json", 1)[1].split("```", 1)[0].strip()
+        if "```" in text:
+            parts = text.split("```")
+            if len(parts) >= 3:
+                return parts[1].strip()
+        return text.strip()
+
+    def _parse_alert_report(self, analysis: str, defaults: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
+        """Split a detect_type 2 response into (alert objects, report text).
+
+        Models are inconsistent about how they return "a tuple of two objects",
+        so several shapes are accepted:
+
+          * a JSON array followed by prose
+          * a JSON object with alerts/report style keys
+          * a Python-looking tuple: ([{...}, {...}], "report")
+          * prose only, with no alerts at all
+
+        Anything unparseable degrades to (no alerts, raw text) rather than
+        raising — an unusable LLM response must not break the ingest pipeline.
+        """
+        text = self._strip_code_fences(analysis)
+        alerts: List[Dict[str, Any]] = []
+        report = ""
+
+        # When the model fences the alert array and writes the report outside
+        # the fence, the stripped block holds only the array — keep the prose
+        # around it so the report is not silently discarded.
+        outside_fence = ""
+        if isinstance(analysis, str) and "```" in analysis:
+            segments = analysis.split("```")
+            # even-indexed segments sit outside the fences
+            outside_fence = " ".join(
+                seg.strip() for i, seg in enumerate(segments) if i % 2 == 0 and seg.strip()
+            ).strip()
+
+        # 1. A single JSON document containing both halves.
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            parsed = None
+
+        if isinstance(parsed, list):
+            alerts, report = parsed, outside_fence
+        elif isinstance(parsed, dict):
+            for key in ('alerts', 'anomalies', 'first', 'first_object', 'objects'):
+                if isinstance(parsed.get(key), list):
+                    alerts = parsed[key]
+                    break
+            for key in ('report', 'summary', 'analysis', 'second', 'second_object', 'text'):
+                if isinstance(parsed.get(key), str):
+                    report = parsed[key]
+                    break
+            if not alerts and not report:
+                alerts = [parsed]
+
+        # 2. Otherwise locate the JSON array and treat the remainder as prose.
+        if not alerts and not report:
+            start = text.find('[')
+            if start != -1:
+                depth, end, in_str, esc = 0, -1, False, False
+                for i in range(start, len(text)):
+                    ch = text[i]
+                    if in_str:
+                        if esc:
+                            esc = False
+                        elif ch == '\\':
+                            esc = True
+                        elif ch == '"':
+                            in_str = False
+                        continue
+                    if ch == '"':
+                        in_str = True
+                    elif ch == '[':
+                        depth += 1
+                    elif ch == ']':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                if end != -1:
+                    candidate = text[start:end]
+                    try:
+                        alerts = json.loads(candidate)
+                    except json.JSONDecodeError:
+                        # Models often emit single quotes, as the prompt example does.
+                        try:
+                            alerts = json.loads(re.sub(r"(?<![A-Za-z0-9])'([^']*)'", r'"\1"', candidate))
+                        except json.JSONDecodeError:
+                            logger.warning("Could not decode the alert array from the LLM response")
+                            alerts = []
+                    report = (text[:start] + text[end:]).strip() or outside_fence
+                else:
+                    report = text
+            else:
+                report = text
+
+        if not isinstance(alerts, list):
+            alerts = [alerts] if isinstance(alerts, dict) else []
+
+        # Strip tuple punctuation left over from a "( [...], "..." )" answer.
+        report = report.strip().lstrip('(').rstrip(')').strip().strip(',').strip()
+        if report.startswith('"') and report.endswith('"') and len(report) > 1:
+            report = report[1:-1]
+
+        normalised = [self._normalise_alert(a, defaults) for a in alerts if isinstance(a, dict)]
+        return normalised, report
+
+    @staticmethod
+    def _normalise_alert(alert: Dict[str, Any], defaults: Dict[str, Any]) -> Dict[str, Any]:
+        """Fill in the fields the GUI and the alerts store rely on.
+
+        The model is asked to echo site/prb_id/name back, but it frequently
+        omits them or invents placeholders, so trusted values always win.
+        """
+        out = dict(alert)
+
+        out['site'] = defaults.get('site') or out.get('site') or 'unknown'
+        out['prb_id'] = defaults.get('prb_id') or out.get('prb_id') or ''
+        out['name'] = defaults.get('name') or out.get('name') or out['prb_id']
+
+        out['alert_type'] = str(out.get('alert_type') or defaults.get('flow') or 'Anomaly')
+        out['msg'] = str(out.get('msg') or out.get('message') or '')
+        out['severity'] = str(out.get('severity') or 'INFO').upper()
+
+        # These three drive the GUI's status icons; the model must not set them.
+        out['status'] = 'unresolved'
+        out['ack'] = 'unseen'
+        out['rslv'] = 'unresolved'
+
+        timestamp = out.get('timestamp')
+        if not isinstance(timestamp, str) or not timestamp.strip():
+            timestamp = datetime.now(tz=timezone.utc).isoformat()
+        out['timestamp'] = timestamp
+
+        # A model-invented id risks collisions and key injection, so the id is
+        # always generated here.
+        out['id'] = f"alert:{out['prb_id'] or 'unknown'}:{uuid.uuid4()}"
+        return out
+
     async def decide_action(
         self,
         anomaly_result: Dict[str, Any],
@@ -411,11 +578,36 @@ class RAGEngine:
         
         return decision_data
     
-    async def batch_content_processing(self, **kwargs):
-        anomaly_result = await self.detect_anomalies(content=kwargs.get('content'), metadata=kwargs.get('metadata'), available_tools=kwargs.get('available_tools'), detect_type=kwargs.get('detect_type'), user_prompt=kwargs.get('prompt'), site=kwargs.get('site'), prb_name=kwargs.get('prb_name'), prb_id=kwargs.get('prb_id')) 
-        if int(kwargs.get('detect_type')) == 0:               
-            action_decision = await self.decide_action(anomaly_result, kwargs.get('available_tools'))
-            return action_decision
+    async def batch_content_processing(self, payload: Dict[str, Any] = None, **kwargs):
+        """Run anomaly detection for a batch.
+
+        Accepts the request body as a single dict (which is how the endpoint
+        calls it) or as keyword arguments. The previous signature was
+        **kwargs-only, so `batch_content_processing(data)` raised
+        TypeError: takes 1 positional argument but 2 were given.
+        """
+        params = dict(payload or {})
+        params.update(kwargs)
+
+        try:
+            detect_type = int(params.get('detect_type', 0))
+        except (TypeError, ValueError):
+            logger.warning(f"Invalid detect_type {params.get('detect_type')!r}; defaulting to 0")
+            detect_type = 0
+
+        anomaly_result = await self.detect_anomalies(
+            content=params.get('content'),
+            metadata=params.get('metadata') or {},
+            available_tools=params.get('available_tools'),
+            detect_type=detect_type,
+            user_prompt=params.get('prompt'),
+            site=params.get('site'),
+            prb_name=params.get('prb_name'),
+            prb_id=params.get('prb_id')
+        )
+
+        if detect_type == 0:
+            return await self.decide_action(anomaly_result, params.get('available_tools'))
 
         return anomaly_result
 

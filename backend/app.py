@@ -1,12 +1,14 @@
 from quart import (Request, Websocket, websocket, render_template_string)
 import asyncio
 from utils.broker import Broker
-from quart import jsonify
+from quart import json
+import html
+import shlex
 from quart.utils import run_sync
 import json
 from init_app import app, logger, cron, schedule_cronjob, cl_sess_db, cl_data_db, cl_auth_db, ip_ban_db, ws_rate_limiter, check_for_utils, cwd, util_obj, api_name, max_auth_attempts, cli, utility_scripts_path, probe_url, init_core_api, main_url, current_client, client_auth, Client
 import os
-from quart import (websocket, abort, jsonify)
+from quart import (websocket, jsonify)
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 from quart import request, jsonify, request, Response
@@ -269,10 +271,8 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                 await asyncio.sleep(check_interval)
 
             else:
-                # Not yet expired: sleep until the sooner of check_interval or time to expiry (based on quantized values)
                 seconds_to_expiry = (exp_quant - now_quant).total_seconds()
                 sleep_for = min(check_interval, max(seconds_to_expiry, 0))
-                #logger.debug(f"Session {sess_id} not yet expired (expires at {exp_quant}), sleeping for {sleep_for} seconds")
                 await asyncio.sleep(sleep_for)
                     
         except asyncio.CancelledError:
@@ -332,6 +332,69 @@ async def apply_cors(response: Response):
         response.headers['Vary'] = 'Origin'
     return response
 
+
+async def publish_probe_alerts(prb_id: str, alerts: list) -> int:
+    published = 0
+    probe_entry = connected_probes.get(prb_id)
+
+    for alert in alerts or []:
+        if not isinstance(alert, dict):
+            logger.warning(f"Skipping non-object alert for {prb_id}: {alert!r}")
+            continue
+
+        alert.setdefault('prb_id', prb_id)
+        alert.setdefault('id', f"alert:{prb_id}:{uuid.uuid4()}")
+        message = json.dumps({'alert': alert, 'sess_id': prb_id, 'id': alert['id']})
+
+        # The probe channel only exists while that probe is connected.
+        if probe_entry and probe_entry.get('broker'):
+            try:
+                await Broker(probe_entry['broker']).publish(message=message)
+            except Exception as e:
+                logger.error(f"Could not publish to the {prb_id} probe channel: {e}")
+        else:
+            logger.info(f"No live probe channel for {prb_id}; user channel only")
+
+        try:
+            await broker.publish(message=message)
+            published += 1
+        except Exception as e:
+            logger.error(f"Could not publish to the user channel: {e}")
+
+        try:
+            await cl_data_db.json_obj_mgr(
+                task='ms',
+                update_data=[(prb_id, f"$.alerts.{alert['id']}", alert)]
+            )
+        except Exception as e:
+            logger.error(f"Could not persist alert {alert['id']}: {e}")
+
+    return published
+
+async def email_report(subject: str, body_html: str) -> bool:
+    prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
+    if not prim_contact:
+        logger.error("No primary contact on file; skipping the report email")
+        return False
+    contact = next(iter(prim_contact.values()))
+
+    email_params = {
+        'sender': {'name': os.getenv('JINIBOT_NAME'), 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+        'to': [{'name': f"{contact.get('fname')} {contact.get('lname')}", 'email': contact.get('eml')}],
+        'subject': subject,
+        'html_content': body_html
+    }
+
+    payload = shlex.quote(json.dumps(email_params))
+    email_code, email_output, email_error = await util_obj.run_shell_cmd(
+        cmd=f"python3 {email_script_path} -t 'send' -p {payload}"
+    )
+    if email_code != 0:
+        logger.error(f"Report email failed ({email_code}): {email_error}")
+        return False
+    logger.info(f"Report email sent: {email_output}")
+    return True
+
 @app.before_request
 async def check_ip():
     if await ip_blocker(conn_obj=request, check_if_allowed=True) is False:
@@ -347,8 +410,6 @@ async def check_ip_ws():
 
 @app.websocket(f"{probe_url}/channels/<string:probe_id>/<int:connect_type>")
 async def heartbeat(probe_id, connect_type):
-    # Declared before the try so the finally block cannot raise NameError when
-    # the connection is rejected during the guards below.
     monitor_task = None
     try:
         token = websocket.args.get('token')
@@ -407,8 +468,6 @@ async def heartbeat(probe_id, connect_type):
             asyncio.ensure_future(_receive_probe())
 
         if probe_id not in connected_probes:
-            # connect_type 1 attaches to an existing session; without one there
-            # is no broker to subscribe to.
             await websocket.close(1008)
             return
 
@@ -437,13 +496,6 @@ async def heartbeat(probe_id, connect_type):
 
 @app.websocket(f"{main_url}/channels/users")
 async def users():
-    """Live event stream for a signed-in user.
-
-    Credentials arrive on the query string as ?id=<session_id>&token=<token>,
-    because the browser WebSocket API cannot set an Authorization header.
-    Authentication happens before accept() — a rejected handshake must never
-    reach the broker subscription.
-    """
     try:
         await ws_jwt_verification(request=websocket)
     except (Unauthorized, ExpiredSignatureError, InvalidTokenError):
@@ -539,8 +591,6 @@ async def login():
     sub_dict = next(iter(account_data.values()))       
     password_hash = sub_dict.get('pwd')
                     
-    # bcrypt needs bytes on both sides; password arrives as JSON text and
-    # the stored hash may be bytes or str depending on Redis settings.
     if account_data and bcrypt.checkpw(password.encode(), as_bytes(password_hash)) is False:
         if request.access_route[-1] not in auth_ping_counter:
             now = datetime.now(tz=timezone.utc)
@@ -563,22 +613,17 @@ async def login():
             auth_ping_counter[request.access_route[-1]]['timestamp']=now
             raise Unauthorized()
 
-        # Any other failed comparison is still a rejection.
         raise Unauthorized()
 
-    # A successful login clears the failure counter for this address.
     auth_ping_counter.pop(request.access_route[-1], None)
                 
     logger.info(f'Account credentials verified for {username}')
-    # Assign session ID for authenticated account
     session_id = util_obj.gen_id()    
     client_auth.login_user(Client(auth_id=session_id, action=Action.WRITE))
     sub_dict.pop('pwd')
     auth_token = client_auth.dump_token(auth_id=session_id, app=app)
     sub_dict['auth_token'] = bcrypt.hashpw(password=auth_token.encode(), salt=bcrypt.gensalt())
     if await cl_sess_db.upload_db_data(id=session_id, data=sub_dict) > 0:
-        # session_id is what the client needs for /logout/<auth_id> and for
-        # the ?id= parameter on the users websocket.
         return jsonify({'token': auth_token, 'session_id': session_id}), 200
 
     logger.error(f"Could not persist session for {username}")
@@ -647,8 +692,7 @@ async def flow():
     if data is None:
         await ip_blocker(conn_obj=request)
         return jsonify(), 400
-    # A new flow arrives with an empty id and gets one minted here; an edit
-    # sends its existing id and is updated in place.
+   
     if not data.get('id'):
         data['id'] = f"flow:{data.get('name')}:{str(uuid.uuid4())}"
     job1 = None
@@ -659,8 +703,6 @@ async def flow():
     task_command = f"python3 {script_path} -f {data.get('flow')} -n {data.get('name')}"
     job1 = await run_sync(lambda: cron.new(command=task_command, comment=job_comment))()
     scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data.get('schedule')))()
-    # run_sync wraps a callable; passing is_valid() called the method on the
-    # event loop thread and then tried to wrap its boolean result.
     if await run_sync(scheduled_job.is_valid)():
         await run_sync(cron.write)()
         await asyncio.sleep(1)
@@ -681,12 +723,6 @@ async def flow():
 @app.route(f'{main_url}/alerts/update', methods=['POST'])
 @user_login_required
 async def alert_update():
-    """Acknowledge or resolve an alert on a probe document.
-
-    Body: {"prb_id": "...", "id": "<alert id>", "ack": "seen", "rslv": "resolved"}
-    Either ack or rslv may be omitted; whatever is supplied is written to
-    $.alerts.<id> on the probe.
-    """
     data = await request.get_json()
     if not data or not data.get('id') or not data.get('prb_id'):
         return jsonify({'error': 'prb_id and id are required'}), 400
@@ -773,8 +809,6 @@ async def prbdata():
     pattern = data.get('pattern') or 'prb:*'
     path = data.get('path') or '$'
 
-    # A JSON body can carry the key list as a real list already; only a string
-    # that looks like a list needs decoding, and a plain glob is left alone.
     if isinstance(pattern, str):
         candidate = pattern.strip()
         if candidate.startswith('['):
@@ -807,15 +841,58 @@ async def prbingest():
     if data is None:
         return jsonify(), 400
     payload = {
-        'documents': data.get('documents'),       
+        'documents': data.get('documents'),
     }
-    ingest_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-    if ingest_resp == 200:
-        analysis_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch", data=data, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-        if analysis_resp == 200:
-            return jsonify(), 200
-    else:
-        return jsonify(), 400
+    ingest_resp, _ = await util_obj.make_http_request(
+        headers={'content-type': 'application/json'},
+        url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch",
+        data=payload,
+        timeout=int(os.getenv('REQUEST_TIMEOUT'))
+    )
+    if ingest_resp != 200:
+        logger.error(f"Document ingest failed with status {ingest_resp}")
+        return jsonify({'error': 'Ingest failed'}), 502
+
+    analysis_resp, analysis_body = await util_obj.make_http_request(
+        headers={'content-type': 'application/json'},
+        url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch",
+        data=data,
+        timeout=int(os.getenv('REQUEST_TIMEOUT'))
+    )
+    if analysis_resp != 200:
+        logger.error(f"Analysis failed with status {analysis_resp}")
+        return jsonify({'error': 'Analysis failed'}), 502
+
+    analysis_body = analysis_body or {}
+    published = 0
+
+    if analysis_body.get('detect_type') == 2:
+        published = await publish_probe_alerts(
+            prb_id=data.get('prb_id'),
+            alerts=analysis_body.get('alerts') or []
+        )
+
+    report = analysis_body.get('report') or analysis_body.get('result')
+    try:
+        detect_type = int(data.get('detect_type', 0))
+    except (TypeError, ValueError):
+        detect_type = 0
+
+    if detect_type in {1, 2} and report:
+        flow_name = data.get('flow_name') or 'automation'
+        html_snippet = (
+            '<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">'
+            '<p>Hello,</p>'
+            f"<p>{os.getenv('JINIBOT_NAME')}'s {flow_name} Analysis:</p>"
+            f"<pre style=\"white-space: pre-wrap; font-family: inherit;\">{html.escape(str(report))}</pre>"
+            '</div>'
+        )
+        await email_report(
+            subject=f"{os.getenv('JINIBOT_NAME')} {flow_name} Analysis Report",
+            body_html=html_snippet
+        )
+
+    return jsonify({'published': published, 'detect_type': detect_type}), 200
 
 @app.route(f'{probe_url}/flow/new', methods=['POST'])
 async def prbflow():
@@ -828,8 +905,6 @@ async def prbflow():
     if not data:
         await ip_blocker(conn_obj=request)
         return jsonify({'error': 'A JSON body is required'}), 400
-    # Same rule as /flows/new: mint an id only when the client did not supply
-    # one, so an edit updates in place instead of creating a duplicate.
     if not data.get('id'):
         data['id'] = f"flow:{data.get('name')}:{str(uuid.uuid4())}"
     saved = await cl_data_db.json_obj_mgr(task='s', save_data=[(data.get('prb_id'), f"$.flows.{data.get('id')}", data)])

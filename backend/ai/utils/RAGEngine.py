@@ -250,7 +250,10 @@ class RAGEngine:
         metadata: Dict[str, Any],
         detect_type: int,
         available_tools: str = None,
-        user_prompt: str = None
+        user_prompt: str = None,
+        site: str = None,
+        prb_id: str = None,
+        prb_name: str = None
     ) -> Dict[str, Any]:
         
         similar = await self.query_similar(
@@ -285,17 +288,30 @@ class RAGEngine:
             2. Performance issues (packet loss, high latency, etc.)
             3. Configuration problems
             4. Anomalies compared to historical patterns
-            5. Severity level (CRITICAL, HIGH, MEDIUM, LOW, INFO)
+            5. Severity level (CRITICAL, HIGH, MEDIUM, LOW, INFO) 
             \n\n
             """
 
-        if detect_type == 0:
-            anomaly_prompt+= "Provide your analysis in JSON format with keys: severity, anomalies (list), recommendations (list)"
+        match detect_type:
+            case 0:
+                anomaly_prompt+= "Provide your analysis in JSON format with keys: severity, anomalies (list), recommendations (list)"
 
-        if detect_type == 1:
-            anomaly_prompt+= f"Provide your analysis in text format identifying all anomalies identified and recommendations using the following available tools. Format this response in the form of a report (with proper headers, labels etc.): \n{available_tools}"
+            case 1:
+                anomaly_prompt+= f"""Provide your analysis in text format identifying all anomalies identified and recommendations using the following available tools. Format this response in the form of a report (with proper headers, labels etc.): \n{available_tools}
+                """
+            case 2:
+                anomaly_prompt+=(
+                    """Provide your analysis as a tuple of two objects:\n 
+                    First objects: list of JSON objects for each identified anomaly, security issue, and unusual pattern, with each JSON object in the following format:\n"""
+                    "{'alert_type': '', 'name': '', 'site': '', status: 'unresolved', timestamp: '', id: '', prb_id: '', ack: 'unseen', rslv: 'unresolved', msg: '', severity: ''}\n"
+                    f"{site} will be used to fill out the 'site' keys for all created JSON objects\n"
+                    f"{prb_id} will be used to fill out the 'prb_id' keys for all created JSON objects\n"
+                    f"{prb_name} will be used to fill out the 'name' keys for all created JSON objects\n"
+                    "You will generate the data for the following keys in each JSON object 'alert_type' (provide a title), 'timestamp' (provide a timestamp in ISO format), 'msg' (provide a brief summary of the identified anomaly, security issue or unusual pattern), 'severity' (provide the severity level)\n\n"
+                    "Second object: A text summary of the anomalies, security issues, or unusual patterns identified during analysis. It shoudlexpand deeper on the summary provided in the list of JSON objects for each alert, and provide any suggestions for remediation, improvement and/or potential configuration changes. Format this response in the form of a text only analysis report (with proper headers, labels etc.)"
+                    )
         
-        analysis = await self.analyze_with_llm(historical_context, anomaly_prompt)
+        analysis = await self.analyze_with_llm(context=historical_context, query=anomaly_prompt)
         
         # Try to parse JSON response
         try:
@@ -314,6 +330,15 @@ class RAGEngine:
                 "recommendations": [],
                 "raw_analysis": analysis
             }
+
+        if detect_type == 1:
+            return {
+                "anomaly_data": anomaly_data,
+                "similar_patterns_found": similar['count']
+            }
+
+        if detect_type == 2:
+            pass
         
         return {
             "anomaly_data": anomaly_data,
@@ -386,10 +411,10 @@ class RAGEngine:
         
         return decision_data
     
-    async def batch_content_processing(self, content: str,  metadata: Dict[str, Any], available_tools: str = None, detect_type: int = 1, user_prompt: str = None):
-        anomaly_result = await self.detect_anomalies(content=content, metadata=metadata, available_tools=available_tools, detect_type=detect_type, user_prompt=user_prompt) 
-        if detect_type == 0:               
-            action_decision = await self.decide_action(anomaly_result, available_tools)
+    async def batch_content_processing(self, **kwargs):
+        anomaly_result = await self.detect_anomalies(content=kwargs.get('content'), metadata=kwargs.get('metadata'), available_tools=kwargs.get('available_tools'), detect_type=kwargs.get('detect_type'), user_prompt=kwargs.get('prompt'), site=kwargs.get('site'), prb_name=kwargs.get('prb_name'), prb_id=kwargs.get('prb_id')) 
+        if int(kwargs.get('detect_type')) == 0:               
+            action_decision = await self.decide_action(anomaly_result, kwargs.get('available_tools'))
             return action_decision
 
         return anomaly_result

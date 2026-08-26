@@ -5,7 +5,7 @@ from quart import request, jsonify
 from init_app import app, logger, headers, rag_engine, call_mcp, fetch_mcp_tools, chat_with_ollama, REQUIRED_OUT_OF_SCOPE_MSG
 import uuid
 from backend.init_app import cl_data_db, cl_auth_db, util_obj
-from backend.app import email_script_path
+from backend.app import email_script_path, connected_probes, broker, Broker
 from datetime import datetime, timezone
 from quart.utils import run_sync
 import os
@@ -421,26 +421,31 @@ async def analyze():
 @app.route('/v1/analyze/batch', methods=['POST'])
 async def analyze_batch():
     data = await request.get_json()
-    batch_content = data.get('content')
-    metadata = data.get('metadata')
-    available_tools = data.get('available_tools')
-    detect_type = data.get('detect_type')
-    prompt = data.get('prompt')
-    if not batch_content or not metadata or not detect_type:
+    if not data:
         return jsonify(), 400
-    action_decision = await rag_engine.batch_content_processing(content=batch_content, metadata=json.loads(metadata), available_tools=available_tools, detect_type=detect_type, user_prompt=prompt)
-    prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
-    prim_contact_dict = next(iter(prim_contact.values()))
-    html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
+    action_decision = await rag_engine.batch_content_processing(data)
+    response_data = None
+    if isinstance(action_decision, tuple):
+        for alert in action_decision[0]:
+            await Broker(connected_probes[data.get('prn_id')].get('broker')).publish(message=json.dumps(alert))
+            await broker.publish(message=json.dumps(alert))
+        response_data = action_decision[1]
+    else:
+        response_data = action_decision
+
+    if int(data.get('detect_type')) in {1, 2}:
+        prim_contact = await cl_auth_db.get_all_data(match='*pct:*')
+        prim_contact_dict = next(iter(prim_contact.values()))
+        html_snippet = f"""<div style="font-family: Arial, sans-serif; color: #111; line-height: 1.5;">
                                                         <p>Hello,</p>
-                                                        <p>{os.getenv('JINIBOT_NAME')}'s {data['flow_name']} Analysis:</p>
-                                                        <p>{action_decision}</p>
+                                                        <p>{os.getenv('JINIBOT_NAME')}'s {data.get('flow_name')} Analysis:</p>
+                                                        <p>{response_data}</p>
                                                         </div>"""
-    email_params = {'sender': {'name': f'{os.getenv('JINIBOT_NAME')}', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
+        email_params = {'sender': {'name': f'{os.getenv('JINIBOT_NAME')}', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
                                                             'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('eml')}],
-                                                            'subject': f"{os.getenv('JINIBOT_NAME')} {data['flow_name']} Analysis Report",
+                                                            'subject': f"{os.getenv('JINIBOT_NAME')} {data.get('flow_name')} Analysis Report",
                                                             'hmtl_content': html_snippet }
-                        
-    email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
-    email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
+           
+        email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
+        email_code, email_output, email_error = await util_obj.run_shell_cmd(cmd=email_command)
     return jsonify(action_decision), 200

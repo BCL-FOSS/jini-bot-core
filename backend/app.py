@@ -27,8 +27,20 @@ connected_probes={}
 NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = None 
 email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
 
+def as_bytes(value):
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value
+    return str(value).encode()
+
 async def retrieve_user_sess_data(sess_id):
-    cl_sess_data = await cl_sess_db.get_all_data(match=f"{sess_id}")
+    if not sess_id:
+        return None
+    cl_sess_data = await cl_sess_db.get_all_data(match=f"*{sess_id}*")
+    if not cl_sess_data:
+        logger.warning(f"No session record found for {sess_id}")
+        return None
     cl_sess_data_dict = next(iter(cl_sess_data.values()))
     logger.info(cl_sess_data_dict)
     data = {'unm': cl_sess_data_dict.get('unm'),
@@ -80,15 +92,19 @@ def user_login_required(func):
 
         token = auth_header.split(" ")[1]
 
-        if auth_id is None or auth_id.strip() == "" or await cl_sess_db.get_all_data(match=f"*{auth_id}*", cnfrm=True) is False or token is None or token.strip() == "".strip():
-            await ip_blocker()
-            return Unauthorized()
+        if auth_id is None or auth_id.strip() == "" or await cl_sess_db.get_all_data(match=f"*{auth_id}*", cnfrm=True) is False or token is None or token.strip() == "":
+            await ip_blocker(conn_obj=request)
+            raise Unauthorized()
 
         sess_data = await retrieve_user_sess_data(sess_id=auth_id)
 
-        if bcrypt.checkpw(password=token.encode(), hashed_password=bytes(sess_data.get('auth_token'))) is False:
-            await ip_blocker()
-            return Unauthorized()
+        if not sess_data or sess_data.get('auth_token') is None:
+            await ip_blocker(conn_obj=request)
+            raise Unauthorized()
+
+        if bcrypt.checkpw(password=token.encode(), hashed_password=as_bytes(sess_data.get('auth_token'))) is False:
+            await ip_blocker(conn_obj=request)
+            raise Unauthorized()
             
         return await app.ensure_async(func)(*args, **kwargs)
     return wrapper
@@ -99,92 +115,111 @@ async def jwt_verification(request: Request, api_key: str = None, auth_id: str =
 
         if api_key:
             api_data = await cl_auth_db.get_all_data(match=f"{api_name}:dta:*")
-            if api_data is None:
+            if not api_data:
                 await ip_blocker(conn_obj=request)
-                return Unauthorized()
+                raise Unauthorized()
             api_data_dict = next(iter(api_data.values()))
-            if bcrypt.checkpw(api_key.encode(), bytes(api_data_dict.get(api_name))) is False:
+            if bcrypt.checkpw(api_key.encode(), as_bytes(api_data_dict.get(api_name))) is False:
                 await ip_blocker(conn_obj=request)
-                return Unauthorized()
-            else:
-                auth_check = True
+                raise Unauthorized()
 
+            auth_check = True
             return api_data_dict, auth_check
-      
+
         auth_header = request.headers.get("Authorization")
         if not auth_header or not auth_header.startswith("Bearer "):
             await ip_blocker(conn_obj=request)
-            return Unauthorized()
+            raise Unauthorized()
         token = auth_header.split(" ")[1]
         sess_data = await retrieve_user_sess_data(sess_id=auth_id)
-        if bcrypt.checkpw(password=token.encode(), hashed_password=bytes(sess_data.get('auth_token'))) is False:
+        if not sess_data or sess_data.get('auth_token') is None:
             await ip_blocker(conn_obj=request)
-            return Unauthorized()
-        else:
-            auth_check = True
+            raise Unauthorized()
+        if bcrypt.checkpw(password=token.encode(), hashed_password=as_bytes(sess_data.get('auth_token'))) is False:
+            await ip_blocker(conn_obj=request)
+            raise Unauthorized()
 
-        return auth_check
-    except Exception:
-        return jsonify("Error, occurred"), 400
+        auth_check = True
+        return None, auth_check
+    except Unauthorized:
+        raise
+    except (ExpiredSignatureError, InvalidTokenError):
+        raise
+    except Exception as e:
+        logger.exception(f"jwt_verification failed: {e}")
+        raise Unauthorized()
 
-async def ws_jwt_verification(request: Websocket = None, api_token: str=None):
+async def ws_jwt_verification(request: Websocket = None, api_token: str = None):
     try:
         if api_token:
             api_data = await cl_auth_db.get_all_data(match=f"{api_name}:dta:*")
+            if not api_data:
+                await ip_blocker(conn_obj=request or websocket)
+                raise Unauthorized()
             api_data_dict = next(iter(api_data.values()))
             jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
-            decoded_token = jwt.decode(jwt=api_token, key=jwt_key , algorithms=["HS256"])
+            decoded_token = jwt.decode(jwt=api_token, key=jwt_key, algorithms=["HS256"])
             if decoded_token.get('rand') != api_data_dict.get(f'{api_name}_rand'):
-                await ip_blocker(conn_obj=request)
-                return Unauthorized()
-          
+                await ip_blocker(conn_obj=request or websocket)
+                raise Unauthorized()
+
         if request:
             auth_id = request.args.get('id')
             token = request.args.get('token')
             if not auth_id or not token:
                 await ip_blocker(conn_obj=request)
-                return Unauthorized()
+                raise Unauthorized()
             sess_data = await retrieve_user_sess_data(sess_id=auth_id)
-            if bcrypt.checkpw(password=token.encode(), hashed_password=bytes(sess_data.get('auth_token'))) is False:
+            if not sess_data or sess_data.get('auth_token') is None:
                 await ip_blocker(conn_obj=request)
-                return Unauthorized()
+                raise Unauthorized()
+            if bcrypt.checkpw(password=token.encode(), hashed_password=as_bytes(sess_data.get('auth_token'))) is False:
+                await ip_blocker(conn_obj=request)
+                raise Unauthorized()
+
+        return True
+    except Unauthorized:
+        raise
     except ExpiredSignatureError:
         logger.warning("JWT expired, need to refresh token")
-        await ip_blocker(conn_obj=request)
-        return ExpiredSignatureError()
+        await ip_blocker(conn_obj=request or websocket)
+        raise
     except InvalidTokenError as e:
         logger.error(f"JWT invalid: {e}")
-        await ip_blocker(conn_obj=request)
-        return InvalidTokenError()
-    except Exception:
-        return jsonify("Error, occurred"), 400
+        await ip_blocker(conn_obj=request or websocket)
+        raise
+    except Exception as e:
+        logger.exception(f"ws_jwt_verification failed: {e}")
+        raise Unauthorized()
 
 async def _receive_probe() -> None:
     while True:
         message = await websocket.receive()
         logger.debug(message)
         message = json.loads(message)
-        action=message['act']
+        action=message.get('act')
         if action:
             match action:
                 case 'hb':
-                    logger.debug(f"Received probe {message['sess_id']} heartbeat: {message}")
+                    logger.debug(f"Received probe {message.get('sess_id')} heartbeat: {message}")
                     now = datetime.now(tz=timezone.utc)
-                    if message["sess_id"] in connected_probes:
-                        entry = connected_probes.get(message["sess_id"])
+                    if message.get('sess_id') in connected_probes:
+                        entry = connected_probes.get(message.get('sess_id'))
                         exp = entry.get('exp')
                         if exp and now <= exp:
                             new_exp = util_obj.round_up_to_30sec(now + timedelta(seconds=30))
                             entry['exp'] = new_exp
-                            connected_probes[message["sess_id"]] = entry
-                            logger.debug(f"Refreshed ping expiry for session {message['sess_id']} to {new_exp}")
+                            connected_probes[message.get('sess_id')] = entry
+                            logger.debug(f"Refreshed ping expiry for session {message.get('sess_id')} to {new_exp}")
                     else:
                         pass
                 case 'map':
-                    doc_id = f"map_{message['timestamp']}_{message['sess_id']}_{str(uuid.uuid4())}"
-                    data=[(message['sess_id'], f'$.devices.{doc_id}', json.loads(message['map']))]
+                    doc_id = f"map_{message.get('timestamp')}_{message.get('sess_id')}_{str(uuid.uuid4())}"
+                    data=[(message.get('sess_id'), f'$.devices.{doc_id}', json.loads(message.get('map')))]
                     if await cl_data_db.json_obj_mgr(task='ms', update_data=data):
-                        logger.info(f"Network Map for Probe {message['sess_id']} received")
+                        logger.info(f"Network Map for Probe {message.get('sess_id')} received")
+                case 'alert':
+                    pass
                 case _:
                     pass
         else:
@@ -197,8 +232,7 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
             entry = connected_probes.get(sess_id)
             now = datetime.now(tz=timezone.utc)
             if not entry:
-                # No entry yet (client hasn't pinged). We still want to expire after specified time from connection start,
-                # but the connection code initializes an entry at connect. So just sleep and continue.
+               
                 await asyncio.sleep(check_interval)
                 continue
 
@@ -210,10 +244,10 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
             now_quant = util_obj.round_down_to_30sec(now)
             exp_quant = util_obj.round_up_to_30sec(exp)
 
-            # Expiration occurred
             if now_quant > exp_quant:
                 logger.info(f"Session {sess_id} expired at {exp_quant} (now_quant={now_quant})")
                 if connected_probes[sess_id]['status'] == 'offline':
+                    await asyncio.sleep(check_interval)
                     continue
 
                 if connected_probes[sess_id]['status'] == 'online':
@@ -229,9 +263,11 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                     await Broker(connected_probes[sess_id]['broker']).publish(message=json.dumps(alert_data))
                     await broker.publish(message=json.dumps(alert_data))
 
-                    if await cl_data_db.upload_db_data(id=alert_id, data=alert_data) > 0:
+                    if await cl_data_db.json_obj_mgr(task='s', save_data=[(sess_id, f"$.alerts.{str(uuid.uuid4())}")]) is not None:
                         logger.info(f"{sess_id} {alert_data['alert']} processed")
-                    
+
+                await asyncio.sleep(check_interval)
+
             else:
                 # Not yet expired: sleep until the sooner of check_interval or time to expiry (based on quantized values)
                 seconds_to_expiry = (exp_quant - now_quant).total_seconds()
@@ -245,16 +281,61 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                 
         except Exception as e:
             logger.exception(f"Error in session_watchdog for {sess_id}: {e}")
+            # Without this the loop retries the same failure without pause.
+            await asyncio.sleep(check_interval)
 
 @app.before_serving
 async def startup(): 
     await check_for_utils()
     await init_core_api()
     
+
+# ---------------------------------------------------------------- CORS
+# Browser and Electron clients load from a different origin (or from
+# file://, whose origin is "null"), so without these headers every
+# cross-origin call fails at the preflight. Set CORS_ALLOWED_ORIGINS to a
+# comma-separated list to restrict it; the default echoes the caller.
+def _allowed_origin(origin: str) -> str | None:
+    if not origin:
+        return None
+    configured = os.getenv('CORS_ALLOWED_ORIGINS', '').strip()
+    if not configured or configured == '*':
+        return origin
+    allowed = [o.strip() for o in configured.split(',') if o.strip()]
+    return origin if origin in allowed else None
+
+@app.before_request
+async def handle_preflight():
+    if request.method != 'OPTIONS':
+        return None
+    origin = _allowed_origin(request.headers.get('Origin'))
+    if not origin:
+        return None
+    response = Response(response='', status=204)
+    response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = ', '.join([
+        'Content-Type',
+        'Authorization',
+        os.getenv('API_KEY_HEADER_NAME', 'x-api-key')
+    ])
+    response.headers['Access-Control-Max-Age'] = '600'
+    return response
+
+@app.after_request
+async def apply_cors(response: Response):
+    origin = _allowed_origin(request.headers.get('Origin'))
+    if origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Vary'] = 'Origin'
+    return response
+
 @app.before_request
 async def check_ip():
     if await ip_blocker(conn_obj=request, check_if_allowed=True) is False:
-        return Unauthorized()
+        raise Unauthorized()
 
 @app.before_websocket
 async def check_ip_ws():
@@ -266,30 +347,37 @@ async def check_ip_ws():
 
 @app.websocket(f"{probe_url}/channels/<string:probe_id>/<int:connect_type>")
 async def heartbeat(probe_id, connect_type):
+    # Declared before the try so the finally block cannot raise NameError when
+    # the connection is rejected during the guards below.
+    monitor_task = None
     try:
         token = websocket.args.get('token')
         if not token:
             await ip_blocker(conn_obj=websocket)
-            await websocket.close()
-            return Unauthorized()
+            await websocket.close(1008)
+            return
 
-        await ws_jwt_verification(api_token=token)
+        try:
+            await ws_jwt_verification(api_token=token)
+        except (Unauthorized, ExpiredSignatureError, InvalidTokenError):
+            await websocket.close(1008)
+            return
+
         if probe_id is None or probe_id.strip() == "":
             await ip_blocker(conn_obj=websocket)
-            await websocket.close()
-            return Unauthorized()
+            await websocket.close(1008)
+            return
 
         if await cl_data_db.get_all_data(match=f"*{probe_id}*", cnfrm=True) is False:
             await ip_blocker(conn_obj=websocket, auto_ban=True)
-            await websocket.close()
-            return Unauthorized()
+            await websocket.close(1008)
+            return
 
         if await ws_rate_limiter.check_rate_limit(client_id=probe_id) is False:
             await ip_blocker(conn_obj=websocket)
-            await websocket.close()
-            return Unauthorized()
+            await websocket.close(1013)
+            return
 
-        monitor_task = None
         if connect_type == 0:
             if probe_id and (probe_id not in connected_probes):
                 now = datetime.now(tz=timezone.utc)
@@ -305,7 +393,7 @@ async def heartbeat(probe_id, connect_type):
                 asyncio.ensure_future(_receive_probe())
                 monitor_task = asyncio.create_task(session_watchdog(sess_id=probe_id))
 
-            if probe_id and (probe_id in connected_probes):
+            elif probe_id and (probe_id in connected_probes):
                 if connected_probes[probe_id]['status'] == 'offline':
                     now = datetime.now(tz=timezone.utc)
                     connected_probes[probe_id]['status'] = 'online'
@@ -317,157 +405,199 @@ async def heartbeat(probe_id, connect_type):
 
         if probe_id and (probe_id in connected_probes) and connect_type == 1:
             asyncio.ensure_future(_receive_probe())
+
+        if probe_id not in connected_probes:
+            # connect_type 1 attaches to an existing session; without one there
+            # is no broker to subscribe to.
+            await websocket.close(1008)
+            return
+
         await websocket.accept()
         try:
-            async for message in  Broker(connected_probes[probe_id]['broker']).subscribe():
+            async for message in Broker(connected_probes[probe_id]['broker']).subscribe():
                 await websocket.send(message)
         except asyncio.CancelledError:
             logger.debug("Subscribe loop cancelled (client disconnected)")
-            pass
-        except Exception as e:
+        except Exception:
             logger.exception("Error while reading from broker or sending websocket message")
-            pass
 
+    except asyncio.CancelledError:
+        logger.debug(f"Heartbeat socket for {probe_id} cancelled")
     except Exception as e:
-        logger.error(e)
-    except asyncio.CancelledError as e:
-        logger.error(e)
+        logger.exception(f"heartbeat error: {e}")
     finally:
         if monitor_task:
+            monitor_task.cancel()
             try:
-                monitor_task.cancel()
                 await monitor_task
+            except asyncio.CancelledError:
+                pass
             except Exception as e:
                 logger.error(f"Error cancelling monitor task: {e}")
-                pass
 
 @app.websocket(f"{main_url}/channels/users")
-async def users():   
+async def users():
+    """Live event stream for a signed-in user.
+
+    Credentials arrive on the query string as ?id=<session_id>&token=<token>,
+    because the browser WebSocket API cannot set an Authorization header.
+    Authentication happens before accept() — a rejected handshake must never
+    reach the broker subscription.
+    """
     try:
         await ws_jwt_verification(request=websocket)
-        await websocket.accept()
+    except (Unauthorized, ExpiredSignatureError, InvalidTokenError):
+        logger.warning("Rejected unauthenticated user channel connection")
+        await websocket.close(1008)
+        return
+    except Exception as e:
+        logger.exception(f"user channel auth error: {e}")
+        await websocket.close(1011)
+        return
+
+    await websocket.accept()
+    logger.info("User channel connected")
+    try:
         async for message in broker.subscribe():
             await websocket.send(message)
+    except asyncio.CancelledError:
+        logger.debug("User channel cancelled (client disconnected)")
     except Exception as e:
-        logger.error(e)
-    except asyncio.CancelledError as e:
-        logger.error(e)
+        logger.exception(f"user channel error: {e}")
 
 @app.route(f'{main_url}/register', methods=['POST'])
 async def register():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        return Unauthorized()
+        raise Unauthorized()
     _, auth_check = await jwt_verification(request=request, api_key=api_key)
+    if auth_check is not True:
+        raise Unauthorized()
 
-    if auth_check is True:
-        user_data = await request.get_json()
-        username = str(user_data['uname']).replace(" ", "").lower()
-        password_hash = bcrypt.hashpw(str(user_data['pass']).encode(), bcrypt.gensalt())
-        logger.info(f"Registering user: {username}")
-        user_nmp, user_id = util_obj.gen_user(username=username)
-        user_obj = {
-                "id": user_id,
-                "unm": username,
-                "pwd": password_hash,
-                "eml": user_data['eml'],
-                "telegram_id": user_data['telegram'],
-                "fname": user_data['fname'],
-                "lname": user_data['lname']
-            }
-        user_key = f"{user_nmp}:{user_id}"
+    user_data = await request.get_json()
+    username = str(user_data.get('uname')).replace(" ", "").lower()
+    password_hash = bcrypt.hashpw(str(user_data.get('pass')).encode(), bcrypt.gensalt())
+    logger.info(f"Registering user: {username}")
+    user_nmp, user_id = util_obj.gen_user(username=username)
+    user_obj = {
+            "id": user_id,
+            "unm": username,
+            "pwd": password_hash,
+            "eml": user_data.get('eml'),
+            "telegram_id": user_data.get('telegram'),
+            "fname": user_data.get('fname'),
+            "lname": user_data.get('lname')
+        }
+    user_key = f"{user_nmp}:{user_id}"
             
-        if await cl_auth_db.get_all_data(match="*pct:*", cnfrm=True) is False:
-                user_obj["db_id"] = f'pct:{user_key}'
-        else:
-                user_obj["db_id"] = user_key
+    if await cl_auth_db.get_all_data(match="*pct:*", cnfrm=True) is False:
+            user_obj["db_id"] = f'pct:{user_key}'
+    else:
+            user_obj["db_id"] = user_key
         
-        if await cl_auth_db.upload_db_data(id=user_obj['db_id'], data=user_obj) > 0:
-                logger.info(f"Registration successful for '{username}'.")
+    if await cl_auth_db.upload_db_data(id=user_obj.get('db_id'), data=user_obj) > 0:
+            logger.info(f"Registration successful for '{username}'.")
                 
         
-                contact_data = {"LASTNAME": user_data['lname'],
-                                    "FIRSTNAME": user_data['fname'],
-                                    }
-                add_contact_params = {'email': user_data['eml'],
-                                'ext_id': user_obj['db_id'],
-                                'attributes': contact_data
-                            }
+            contact_data = {"LASTNAME": user_obj.get('lname'),
+                                "FIRSTNAME": user_obj.get('fname'),
+                                }
+            add_contact_params = {'email': user_obj.get('eml'),
+                            'ext_id': user_obj.get('db_id'),
+                            'attributes': contact_data
+                        }
                                         
-                add_contact_command = f"python3 {email_script_path} -t 'add' -p {add_contact_params}"
-                add_contact_code, add_contact_output, add_contact_error = await util_obj.run_shell_cmd(cmd=add_contact_command)
-                logger.info(f"code: {add_contact_code}\noutput: {add_contact_output}\nerror: {add_contact_error}")
-                return jsonify(), 200
-        else:
-            return jsonify(), 400
+            add_contact_command = f"python3 {email_script_path} -t 'add' -p {add_contact_params}"
+            add_contact_code, add_contact_output, add_contact_error = await util_obj.run_shell_cmd(cmd=add_contact_command)
+            logger.info(f"code: {add_contact_code}\noutput: {add_contact_output}\nerror: {add_contact_error}")
+            return jsonify({'registered': username}), 200
+    else:
+        return jsonify({'error': 'Could not create the account'}), 400
 
 @app.route(f'{main_url}/login', methods=['POST'])
 async def login():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        return Unauthorized()
+        raise Unauthorized()
     _, auth_check = await jwt_verification(request=request, api_key=api_key)
-    
-    if auth_check is True:
-        auth_data = await request.get_json()
-        username = str(auth_data['uname'])
-        password = str(auth_data['pass'])
-    
-        username = username.replace(" ", "").lower()
-    
-        if await cl_auth_db.get_all_data(match=f'*uid:{username}*', cnfrm=True) is False:
-            await ip_blocker(conn_obj=request)
-            return Unauthorized()
-    
-        account_data = await cl_auth_db.get_all_data(match=f'*uid:{username}*')    
-        sub_dict = next(iter(account_data.values()))       
-        password_hash = sub_dict.get('pwd')
-                    
-        if account_data and bcrypt.checkpw(password, password_hash) is False:
-            if request.access_route[-1] not in auth_ping_counter:
-                now = datetime.now(tz=timezone.utc)
-                auth_ping_counter[request.access_route[-1]] = {
-                    "ip": request.access_route[-1],
-                    "fail_count": 1,
-                    "timestamp": now
-                    }
-                return Unauthorized()
-        
-            if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] >= int(os.getenv('MAX_AUTH_ATTEMPTS')):
-                now = datetime.now(tz=timezone.utc)
-                auth_ping_counter[request.access_route[-1]]['timestamp']=now
-                await ip_blocker(conn_obj=request, auto_ban=True)
-                return Unauthorized()
+    if auth_check is not True:
+        raise Unauthorized()
 
-            if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] < int(os.getenv('MAX_AUTH_ATTEMPTS')):
-                now = datetime.now(tz=timezone.utc)
-                auth_ping_counter[request.access_route[-1]]['fail_count']+=1
-                auth_ping_counter[request.access_route[-1]]['timestamp']=now
-                return Unauthorized()
+    auth_data = await request.get_json()
+    username = str(auth_data.get('uname'))
+    password = str(auth_data.get('pass'))
+    
+    username = username.replace(" ", "").lower()
+    
+    if await cl_auth_db.get_all_data(match=f'*uid:{username}*', cnfrm=True) is False:
+        await ip_blocker(conn_obj=request)
+        raise Unauthorized()
+    
+    account_data = await cl_auth_db.get_all_data(match=f'*uid:{username}*')    
+    sub_dict = next(iter(account_data.values()))       
+    password_hash = sub_dict.get('pwd')
+                    
+    # bcrypt needs bytes on both sides; password arrives as JSON text and
+    # the stored hash may be bytes or str depending on Redis settings.
+    if account_data and bcrypt.checkpw(password.encode(), as_bytes(password_hash)) is False:
+        if request.access_route[-1] not in auth_ping_counter:
+            now = datetime.now(tz=timezone.utc)
+            auth_ping_counter[request.access_route[-1]] = {
+                "ip": request.access_route[-1],
+                "fail_count": 1,
+                "timestamp": now
+                }
+            raise Unauthorized()
+        
+        if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] >= int(os.getenv('MAX_AUTH_ATTEMPTS')):
+            now = datetime.now(tz=timezone.utc)
+            auth_ping_counter[request.access_route[-1]]['timestamp']=now
+            await ip_blocker(conn_obj=request, auto_ban=True)
+            raise Unauthorized()
+
+        if request.access_route[-1] in auth_ping_counter and auth_ping_counter[request.access_route[-1]]['fail_count'] < int(os.getenv('MAX_AUTH_ATTEMPTS')):
+            now = datetime.now(tz=timezone.utc)
+            auth_ping_counter[request.access_route[-1]]['fail_count']+=1
+            auth_ping_counter[request.access_route[-1]]['timestamp']=now
+            raise Unauthorized()
+
+        # Any other failed comparison is still a rejection.
+        raise Unauthorized()
+
+    # A successful login clears the failure counter for this address.
+    auth_ping_counter.pop(request.access_route[-1], None)
                 
-        logger.info(f'Account credentials verified for {username}')
-        # Assign session ID for authenticated account
-        session_id = util_obj.gen_id()    
-        client_auth.login_user(Client(auth_id=session_id, action=Action.WRITE))
-        sub_dict.pop('pwd')
-        auth_token = client_auth.dump_token(auth_id=session_id, app=app)
-        sub_dict['auth_token'] = bcrypt.hashpw(password=auth_token.encode(), salt=bcrypt.gensalt())
-        if await cl_sess_db.upload_db_data(id=session_id, data=sub_dict) > 0:
-            return jsonify({'token': auth_token, 'session_id': session_id})
+    logger.info(f'Account credentials verified for {username}')
+    # Assign session ID for authenticated account
+    session_id = util_obj.gen_id()    
+    client_auth.login_user(Client(auth_id=session_id, action=Action.WRITE))
+    sub_dict.pop('pwd')
+    auth_token = client_auth.dump_token(auth_id=session_id, app=app)
+    sub_dict['auth_token'] = bcrypt.hashpw(password=auth_token.encode(), salt=bcrypt.gensalt())
+    if await cl_sess_db.upload_db_data(id=session_id, data=sub_dict) > 0:
+        # session_id is what the client needs for /logout/<auth_id> and for
+        # the ?id= parameter on the users websocket.
+        return jsonify({'token': auth_token, 'session_id': session_id}), 200
+
+    logger.error(f"Could not persist session for {username}")
+    return jsonify({'error': 'Could not create a session'}), 500
 
 @app.route(f'{main_url}/logout/<string:auth_id>', methods=['GET'])
 @user_login_required
 async def logout(auth_id):
-    
-    if await cl_sess_db.get_all_data(match=f'{auth_id}', cnfrm=True) is False:
-            await ip_blocker()
-            return Unauthorized()
-        
+
+    if await cl_sess_db.get_all_data(match=f'*{auth_id}*', cnfrm=True) is False:
+        await ip_blocker(conn_obj=request)
+        raise Unauthorized()
+
     if await cl_sess_db.del_obj(key=auth_id) is not None:
         client_auth.logout_user()
-        return jsonify(), 200
+        return jsonify({'logged_out': auth_id}), 200
+
+    logger.error(f"Could not delete session {auth_id}")
+    return jsonify({'error': 'Could not end the session'}), 400
 
 @app.route(f'{main_url}/reset', methods=['GET'])
 @user_login_required
@@ -498,8 +628,8 @@ async def reset():
 
                         </div>"""
             email_params = {'sender': {'name': 'umjiniti Admin', 'email': os.environ.get('BREVO_SENDER_EMAIL')},
-                            'to': [{"name": f'{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}', "email": prim_contact_dict.get('eml')}],
-                            'subject': f"New Jini API Key Generated for {prim_contact_dict.get('email')}",
+                            'to': [{"name": f"{prim_contact_dict.get('fname')} {prim_contact_dict.get('lname')}", "email": prim_contact_dict.get('eml')}],
+                            'subject': f"New Jini API Key Generated for {prim_contact_dict.get('eml')}",
                             'hmtl_content': html_snippet }
             
             email_command = f"python3 {email_script_path} -t 'send' -p {email_params}"
@@ -517,32 +647,78 @@ async def flow():
     if data is None:
         await ip_blocker(conn_obj=request)
         return jsonify(), 400
-    if data['id'] == 'default':
-        data['id'] = f"flow:{data['name']}:{str(uuid.uuid4())}" 
+    # A new flow arrives with an empty id and gets one minted here; an edit
+    # sends its existing id and is updated in place.
+    if not data.get('id'):
+        data['id'] = f"flow:{data.get('name')}:{str(uuid.uuid4())}"
     job1 = None
     now = datetime.now(tz=timezone.utc).isoformat()
-    job_comment=f"auto_job_{data['name']}_{now}"
+    job_comment=f"auto_job_{data.get('name')}_{now}"
     task_command = ""
     script_path = os.path.join(cwd, 'utils', 'RemoteFlowRunner.py')
-    task_command = f"python3 {script_path} -f {data['flow']} -n {data['name']}"
+    task_command = f"python3 {script_path} -f {data.get('flow')} -n {data.get('name')}"
     job1 = await run_sync(lambda: cron.new(command=task_command, comment=job_comment))()
-    scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data['schedule']))()
-    if await run_sync(scheduled_job.is_valid())():
-        await run_sync(cron.write())()
+    scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data.get('schedule')))()
+    # run_sync wraps a callable; passing is_valid() called the method on the
+    # event loop thread and then tried to wrap its boolean result.
+    if await run_sync(scheduled_job.is_valid)():
+        await run_sync(cron.write)()
         await asyncio.sleep(1)
         logger.info(f"Cron job added: {scheduled_job}")
         data['comment'] = job_comment
-        await cl_data_db.json_obj_mgr(task='ms', update_data=[(data['prb_id'], f"$.flows.{data['id']}", data)])
-        return jsonify(), 200
+        saved = await cl_data_db.json_obj_mgr(
+            task='ms',
+            update_data=[(data['prb_id'], f"$.flows.{data.get('id')}", data)]
+        )
+        if not saved:
+            logger.error(f"Cron job scheduled but flow {data.get('id')} could not be saved")
+            return jsonify({'error': 'The flow could not be saved'}), 400
+        return jsonify({'id': data.get('id'), 'comment': job_comment}), 200
     else:
-        return jsonify(), 400
+        return jsonify({'error': 'The schedule produced an invalid cron job'}), 400
  
+
+@app.route(f'{main_url}/alerts/update', methods=['POST'])
+@user_login_required
+async def alert_update():
+    """Acknowledge or resolve an alert on a probe document.
+
+    Body: {"prb_id": "...", "id": "<alert id>", "ack": "seen", "rslv": "resolved"}
+    Either ack or rslv may be omitted; whatever is supplied is written to
+    $.alerts.<id> on the probe.
+    """
+    data = await request.get_json()
+    if not data or not data.get('id') or not data.get('prb_id'):
+        return jsonify({'error': 'prb_id and id are required'}), 400
+
+    probes = await cl_data_db.json_obj_mgr(
+        task='g', pattern=[data.get('prb_id')], path=f"$.alerts.{data.get('id')}"
+    )
+    existing = next(iter(probes.values()), None) if probes else None
+    while isinstance(existing, list) and len(existing) == 1:
+        existing = existing[0]
+
+    if not isinstance(existing, dict):
+        return jsonify({'error': 'No such alert'}), 404
+
+    for field in ('ack', 'rslv', 'status'):
+        if data.get(field):
+            existing[field] = data[field]
+
+    saved = await cl_data_db.json_obj_mgr(
+        task='ms',
+        update_data=[(data.get('prb_id'), f"$.alerts.{data.get('id')}", existing)]
+    )
+    if not saved:
+        return jsonify({'error': 'The alert could not be updated'}), 400
+    return jsonify(existing), 200
+
 @app.route(f'{probe_url}/init', methods=['GET'])
 async def prbinit():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        return Unauthorized()
+        raise Unauthorized()
     api_data_dict, _ = await jwt_verification(request=request, api_key=api_key)
     api_jwt_key = api_data_dict.get(f'{api_name}_jwt_secret')
     api_rand = api_data_dict.get(f'{api_name}_rand')
@@ -563,7 +739,7 @@ async def prbenroll():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        return Unauthorized()
+        raise Unauthorized()
     await jwt_verification(request=request, api_key=api_key)
     site = request.args.get('site')
     if not site:
@@ -582,7 +758,7 @@ async def prbenroll():
     adopted_probe_data['win_count']=0
     adopted_probe_data['android_count']=0
     adopted_probe_data['iphone_count']=0
-    if await cl_data_db.json_obj_mgr(task='s', save_data=[(adopted_probe_data['prb_id'], f"$", adopted_probe_data)]) is not None:
+    if await cl_data_db.json_obj_mgr(task='s', save_data=[(adopted_probe_data.get('prb_id'), f"$", adopted_probe_data)]) is not None:
         return jsonify(), 200
     else:
         return jsonify(), 400
@@ -593,19 +769,28 @@ async def prbdata():
     data = await request.get_json()
     if not data:
         await ip_blocker(conn_obj=request)
-        return Unauthorized()
-    probes=None
-    if isinstance(data['pattern'], str):
-        probes = await cl_data_db.json_obj_mgr(task='g', pattern=data['pattern'], path=data['path'])
-    else:
-        probes = await cl_data_db.json_obj_mgr(task='g', path=data['path'], pattern=json.loads(data['pattern']))
-    return jsonify(probes), 200
+        return jsonify({'error': 'A JSON body is required'}), 400
+    pattern = data.get('pattern') or 'prb:*'
+    path = data.get('path') or '$'
+
+    # A JSON body can carry the key list as a real list already; only a string
+    # that looks like a list needs decoding, and a plain glob is left alone.
+    if isinstance(pattern, str):
+        candidate = pattern.strip()
+        if candidate.startswith('['):
+            try:
+                pattern = json.loads(candidate)
+            except json.JSONDecodeError:
+                logger.warning(f"Could not decode key list {candidate!r}; treating it as a glob")
+
+    probes = await cl_data_db.json_obj_mgr(task='g', pattern=pattern, path=path)
+    return jsonify(probes if probes is not None else {}), 200
     
 @app.route(f'{probe_url}/delete', methods=['POST'])
 @user_login_required
 async def prbdelete():
     data = await request.get_json() 
-    id = data['id']
+    id = data.get('id')
     result = await cl_data_db.del_obj(key=id)
     if result is None:
         return jsonify(), 400
@@ -616,18 +801,19 @@ async def prbingest():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        return Unauthorized()
+        raise Unauthorized()
     await jwt_verification(request=request, api_key=api_key)    
     data = await request.get_json()
     if data is None:
         return jsonify(), 400
     payload = {
-        'documents': data['documents'],       
+        'documents': data.get('documents'),       
     }
     ingest_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/ingest/batch", data=payload, timeout=int(os.getenv('REQUEST_TIMEOUT')))
-
     if ingest_resp == 200:
-        return jsonify(), 200
+        analysis_resp, _ = await util_obj.make_http_request(headers={'content-type': 'application/json'}, url=f"{os.getenv('OLLAMA_PROXY_URL')}/analyze/batch", data=data, timeout=int(os.getenv('REQUEST_TIMEOUT')))
+        if analysis_resp == 200:
+            return jsonify(), 200
     else:
         return jsonify(), 400
 
@@ -636,44 +822,48 @@ async def prbflow():
     api_key = request.headers.get(os.getenv('API_KEY_HEADER_NAME'))
     if not api_key:
         await ip_blocker(conn_obj=request)
-        return Unauthorized()
+        raise Unauthorized()
     await jwt_verification(request=request, api_key=api_key)
     data = await request.get_json()
     if not data:
         await ip_blocker(conn_obj=request)
-        return Unauthorized()
-    if data['id'] == 'default':
-        data['id'] = f"flow:{data['name']}:{str(uuid.uuid4())}" 
-    await cl_data_db.json_obj_mgr(task='s', save_data=[(data['prb_id'], f"$.flows.{data['id']}", data)])
-    return jsonify(), 200
+        return jsonify({'error': 'A JSON body is required'}), 400
+    # Same rule as /flows/new: mint an id only when the client did not supply
+    # one, so an edit updates in place instead of creating a duplicate.
+    if not data.get('id'):
+        data['id'] = f"flow:{data.get('name')}:{str(uuid.uuid4())}"
+    saved = await cl_data_db.json_obj_mgr(task='s', save_data=[(data.get('prb_id'), f"$.flows.{data.get('id')}", data)])
+    if not saved:
+        return jsonify({'error': 'The flow could not be saved'}), 400
+    return jsonify({'id': data['id']}), 200
 
 @app.errorhandler(Unauthorized)
-async def unauthorized():
+async def unauthorized(e):
     await ip_blocker(conn_obj=request)
     return await render_template_string(json.dumps({"error": "Authentication error"})), 401
 
 @app.errorhandler(ExpiredSignatureError)
-async def token_expired():
+async def token_expired(e):
     await ip_blocker(conn_obj=request)
     return await render_template_string(json.dumps({"error": "Token expired"})), 1008
 
 @app.errorhandler(InvalidTokenError)
-async def invalid_token():
+async def invalid_token(e):
     await ip_blocker(conn_obj=request)
     return await render_template_string(json.dumps({"error": "Invalid token"})), 1000
 
 @app.errorhandler(400)
-async def bad_request():
+async def bad_request(e):
     await ip_blocker(conn_obj=request)
     return await render_template_string(json.dumps({"error": "Bad Request"})), 400
 
 @app.errorhandler(401)
-async def need_to_login():
+async def need_to_login(e):
     await ip_blocker(conn_obj=request)
     return await render_template_string(json.dumps({"error": "Authentication error"})), 401
     
 @app.errorhandler(404)
-async def page_not_found():
+async def page_not_found(e):
     await ip_blocker(conn_obj=request)
     return await render_template_string(json.dumps({"error": "Resource not found"})), 404
 

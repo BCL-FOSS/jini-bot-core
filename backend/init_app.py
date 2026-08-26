@@ -29,13 +29,11 @@ app.config.from_object("config")
 app.config['SECRET_KEY'] = secrets.token_urlsafe()
 app.config['SECURITY_PASSWORD_SALT'] = str(secrets.SystemRandom().getrandbits(128))
 
-# Authentication salts for user & admin accounts
 auth_salts = {
     "client": str(secrets.SystemRandom().getrandbits(128)),
     "admin": str(secrets.SystemRandom().getrandbits(128)),
 }
 
-# Authentication configs for user & admin accounts
 auth_configs = {
     "client": {
         "attribute_name": "client",
@@ -49,7 +47,6 @@ auth_configs = {
     },
 }
 
-# Create Quart-Auth user and admin account types
 for key, config in auth_configs.items():
     if key == "admin":
         admin_auth = QuartAuth(
@@ -67,7 +64,6 @@ for key, config in auth_configs.items():
         )
         client_auth.user_class=Client
 
-# Generate current client & admin variables for umjiniti authentication control
 current_client = LocalProxy(lambda: client_auth.load_user())
 current_admin = LocalProxy(lambda: admin_auth.load_user())
 
@@ -127,7 +123,6 @@ async def check_for_utils():
 
 def load_network_diagnostic_prompt() -> str:
     try:
-        #base_dir = os.path.dirname(os.path.abspath(__file__))  # backend/
         prompt_path = os.path.join(cwd, "ai", "skills", "network-diagnostic-system-prompt.md")
         logger.info(f"Loading network diagnostic system prompt from: {prompt_path}")
         with open(prompt_path, "r", encoding="utf-8") as f:

@@ -7,7 +7,7 @@ import json
 import re
 from utils.RedisDB import RedisDB
 from utils.Util import Util
-from typing import List, Dict, Any, Optional
+from typing import Dict
 
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger('passlib').setLevel(logging.ERROR)

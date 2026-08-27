@@ -1,5 +1,4 @@
 import redis.asyncio as redis
-import json
 import logging
 from typing import List
 from init_app import logger
@@ -108,16 +107,11 @@ class RedisDB:
                 case 'g':
                     if pattern is not None:
                         if isinstance(pattern, str):
-                            # scan_iter returns an async iterator on an async
-                            # client, so this has to be an async comprehension.
                             matching_keys = [key async for key in self.redis_conn.scan_iter(match=pattern)]
                         else:
                             matching_keys = list(pattern)
 
                         if matching_keys:
-                            # Redis may hand keys back as bytes depending on
-                            # decode_responses; normalise so the JSON response
-                            # is serialisable and the client sees real keys.
                             matching_keys = [
                                 key.decode() if isinstance(key, bytes) else key
                                 for key in matching_keys

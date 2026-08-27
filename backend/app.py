@@ -261,11 +261,11 @@ async def session_watchdog(sess_id: str, check_interval: float = 5.0):
                            'sess_id': sess_id,
                            'id': alert_id
                     }
-                    alert_data = [{'alert_type': '', 'name': '', 'site': '', 'status': 'unresolved', 'timestamp': '', 'id': '', 'prb_id': '', 'ack': 'unseen', 'rslv': 'unresolved', 'msg': '', 'severity': ''}]
+                    alert_data = [{'alert_type': 'outage', 'name': '', 'site': '', 'status': 'unresolved', 'timestamp': '', 'id': '', 'prb_id': '', 'ack': 'unseen', 'rslv': 'unresolved', 'msg': '', 'severity': ''}]
 
                     await publish_probe_alerts(prb_id=sess_id, alerts=alert_data)
 
-                    if await cl_data_db.json_obj_mgr(task='s', save_data=[(sess_id, f"$.alerts.{str(uuid.uuid4())}")]) is not None:
+                    if await cl_data_db.json_obj_mgr(task='s', save_data=[(sess_id, f"$.alerts.{str(uuid.uuid4())}", alert_data)]) is not None:
                         logger.info(f"{sess_id} {alert_data['alert']} processed")
 
                 await asyncio.sleep(check_interval)
@@ -448,7 +448,8 @@ async def heartbeat(probe_id, connect_type):
                                         'broker': Broker(),
                                         'status': 'online',
                                         'badge': 'success',
-                                        'last_online': now.isoformat()
+                                        'last_online': now.isoformat(),
+                                        'token': token
                                         }
                 logger.debug(f"Initialized ping expiry for session {probe_id} -> {connected_probes[probe_id]['exp']}")
                 asyncio.ensure_future(_receive_probe())

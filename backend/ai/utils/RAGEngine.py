@@ -180,8 +180,7 @@ class RAGEngine:
             str: LLM analysis result
         """
         if system_prompt is None:
-            system_prompt = """You are an expert network security analyst. Analyze network tool outputs, 
-            identify anomalies, security issues, and performance problems. Provide actionable insights 
+            system_prompt = """You are an expert network security analyst, network engineer and systems administrator. Analyze network tool outputs, identify anomalies, security issues, and performance problems. Provide actionable insights 
             and recommend appropriate responses."""
         
         messages = [

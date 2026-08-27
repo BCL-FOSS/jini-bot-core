@@ -18,6 +18,14 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 connected_chats=[{}]
 
+async def check_id(self, connecting_id: int) -> bool:
+        allowed_telegram_ids = await cl_data_db.get_all_data(match=f"telegram_dta:*")
+        for tg_id in allowed_telegram_ids:
+            if tg_id.get('id') != str(connecting_id):
+                return False
+            else:
+                return True
+
 async def alerts_telegram_users(ws_url: str, application: Application):
     ws = create_connection(url=ws_url)
     to_check = True
@@ -25,7 +33,7 @@ async def alerts_telegram_users(ws_url: str, application: Application):
         async def receive_resp():
             raw = await asyncio.to_thread(ws.recv)
             data = json.loads(raw)
-            if data and data['alert'] == 'outage':
+            if data and data['alert_type'] == 'outage':
                 for chat in connected_chats:
                     bot = application.bot
                     chat = Chat(id=chat['chat_id'], type=Chat.PRIVATE)
@@ -48,9 +56,8 @@ async def chat_update(update: Update):
     await asyncio.sleep(0.2)
 
 async def check_probes_status(app: Application):
-    global connected_probes
     for probe in connected_probes.values():
-        ws_url = f"wss://{os.getenv('SERVER_NAME')}/v1/api/core/channels/probe/heartbeat/{probe['id']}/{1}"
+        ws_url = f"wss://{os.getenv('SERVER_NAME')}/v1/api/core/channels/probe/heartbeat/{probe['id']}/{1}?token={connected_probes[probe['id']]['token']}"
         connected_probes[probe['prb_id']]['alerts'] = asyncio.create_task(alerts_telegram_users(ws_url=ws_url, application=app))
         await asyncio.sleep(0.1)
 
@@ -149,7 +156,7 @@ async def execute_tool_call(prompt: str):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     connecting_id = update.effective_user.id if update.effective_user else update.effective_chat.id
-    is_authorized = await util_obj.check_id(connecting_id)
+    is_authorized = await check_id(connecting_id)
     if not is_authorized:
         return
 
@@ -167,7 +174,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def exec(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     connecting_id = update.effective_user.id if update.effective_user else update.effective_chat.id
-    is_authorized = await util_obj.check_id(connecting_id)
+    is_authorized = await check_id(connecting_id)
     if not is_authorized:
         return
 
@@ -186,7 +193,7 @@ async def exec(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     connecting_id = update.effective_user.id if update.effective_user else update.effective_chat.id
-    is_authorized = await util_obj.check_id(connecting_id)
+    is_authorized = await check_id(connecting_id)
     if not is_authorized:
         return
     if not context.args:
@@ -223,14 +230,14 @@ async def send_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     connecting_id = update.effective_user.id if update.effective_user else update.effective_chat.id
-    is_authorized = await util_obj.check_id(connecting_id)
+    is_authorized = await check_id(connecting_id)
     if not is_authorized:
         return
     await context.bot.send_message(chat_id=update.effective_chat.id, text="Sorry, I didn't understand that command.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     connecting_id = update.effective_user.id if update.effective_user else update.effective_chat.id
-    is_authorized = await util_obj.check_id(connecting_id)
+    is_authorized = await check_id(connecting_id)
     if not is_authorized:
         return
     await chat_update(update=update)

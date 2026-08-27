@@ -5,18 +5,11 @@ import random
 import logging
 import os
 import logging
-import os
 import jwt
 from datetime import datetime, timedelta, timezone
 from tzlocal import get_localzone
-import jwt
-import re
 from typing import Tuple
-import os
-import jwt
-from datetime import datetime, timedelta, timezone
 import httpx
-from init_app import cl_data_db
 import asyncio
 
 class Util:
@@ -152,14 +145,6 @@ class Util:
                 return exec_resp.status_code, None
             exec_resp_data = exec_resp.json()
             return exec_resp.status_code, exec_resp_data
-
-    async def check_id(self, connecting_id: int) -> bool:
-        allowed_telegram_ids = await cl_data_db.get_all_data(match=f"telegram_dta:*")
-        for tg_id in allowed_telegram_ids:
-            if tg_id.get('id') != str(connecting_id):
-                return False
-            else:
-                return True
 
     async def run_shell_cmd(self, cmd: str):
         process = await asyncio.create_subprocess_shell(

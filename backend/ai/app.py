@@ -21,8 +21,9 @@ async def chat():
     tools = data.get("tools")
     user = data.get("user")
     api_key = data.get("api_key")
-    headers['x-api-key'] = api_key
-    logger.info(headers)
+    chat_headers = headers.copy()
+    chat_headers['x-api-key'] = api_key
+    logger.info(chat_headers)
     tool_instructions = ""
     response_payload = {}
 
@@ -34,7 +35,7 @@ async def chat():
         tool_schemas = []
         for t in tools:
             if t.get("type") == "mcp":
-                mcp_tools = await fetch_mcp_tools(server_url=t["server_url"], conn_obj=web_client)
+                mcp_tools = await fetch_mcp_tools(server_url=t["server_url"], conn_obj=web_client, headers=chat_headers)
                 if mcp_tools is None:
                     return {'Error': f"Failed to fetch tools from {t['server_url']}"}
                 for tool in mcp_tools:
@@ -192,7 +193,7 @@ async def chat():
 
             if server_url:
                 try:
-                    result = await call_mcp(server_url=server_url, tool_call=tc, conn_obj=web_client)
+                    result = await call_mcp(server_url=server_url, tool_call=tc, conn_obj=web_client, headers=chat_headers)
                     tool_outputs.append({"tool": tool_name, "server": server_label, "server_url": server_url, "output": result})
                 except Exception as e:
                     logger.exception(f"Error calling MCP tool {tool_name} on {server_url}: {e}")

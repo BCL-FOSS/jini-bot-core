@@ -33,25 +33,25 @@ async def alerts_telegram_users(ws_url: str, application: Application):
         async def receive_resp():
             raw = await asyncio.to_thread(ws.recv)
             data = json.loads(raw)
-            if data and data['alert_type'] == 'outage':
-                for chat in connected_chats:
-                    bot = application.bot
-                    chat = Chat(id=chat['chat_id'], type=Chat.PRIVATE)
-                    user = User(id=chat['chat_id'], first_name="System", is_bot=False)    
-                    mock_message = Message(message_id=0, date=None, chat=chat, from_user=user, text="")
-                    mock_update = Update(update_id=0, message=mock_message)
-                    context = ContextTypes.DEFAULT_TYPE.from_update(mock_update, application)
-                    await send_alert(mock_update, context)
-                #await asyncio.to_thread(ws.close)
-            else:
-                await receive_resp()
+            match data.get('alert_type'):
+                case 'outage':
+                    for chat in connected_chats:
+                        bot = application.bot
+                        chat = Chat(id=chat['chat_id'], type=Chat.PRIVATE)
+                        user = User(id=chat['chat_id'], first_name="System", is_bot=False)    
+                        mock_message = Message(message_id=0, date=None, chat=chat, from_user=user, text="")
+                        mock_update = Update(update_id=0, message=mock_message)
+                        context = ContextTypes.DEFAULT_TYPE.from_update(mock_update, application)
+                        await send_alert(mock_update, context)
+                    await asyncio.to_thread(ws.close)
+                    continue
         await receive_resp()
 
 async def chat_update(update: Update):
     if update.effective_chat.id and (update.effective_chat.id not in connected_chats):
         connected_chats.append({
-                                'chat_id': update.effective_chat.id,
-                                'user_id': update.effective_user.id
+            'chat_id': update.effective_chat.id,
+            'user_id': update.effective_user.id
                             })
     await asyncio.sleep(0.2)
 

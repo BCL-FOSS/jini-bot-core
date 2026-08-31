@@ -122,9 +122,9 @@ async def check_for_utils():
     else:
         pass
 
-def load_network_diagnostic_prompt() -> str:
+def load_skill(skill_md: str) -> str:
     try:
-        prompt_path = os.path.join(cwd, "ai", "skills", "network-diagnostic-system-prompt.md")
+        prompt_path = os.path.join(cwd, "ai", "skills", skill_md)
         logger.info(f"Loading network diagnostic system prompt from: {prompt_path}")
         with open(prompt_path, "r", encoding="utf-8") as f:
             return f.read()

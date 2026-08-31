@@ -26,7 +26,6 @@ broker = Broker()
 auth_ping_counter = {}
 auth_attempts={}
 connected_probes={}   
-NETWORK_DIAGNOSTIC_SYSTEM_PROMPT_MD = None 
 email_script_path = os.path.join(utility_scripts_path, f'EmailMgr.py')
 
 def as_bytes(value):
@@ -289,7 +288,6 @@ async def startup():
     await check_for_utils()
     await init_core_api()
     
-
 # ---------------------------------------------------------------- CORS
 # Browser and Electron clients load from a different origin (or from
 # file://, whose origin is "null"), so without these headers every
@@ -462,6 +460,8 @@ async def heartbeat(probe_id, connect_type):
                     connected_probes[probe_id]['badge'] = 'success'
                     connected_probes[probe_id]['last_online'] = now.isoformat()
                     connected_probes[probe_id]['exp'] = util_obj.round_up_to_30sec(now + timedelta(seconds=30))
+                    if token != connected_probes[probe_id]['token']:
+                        connected_probes[probe_id]['token'] = token
                 asyncio.ensure_future(_receive_probe())
                 monitor_task = asyncio.create_task(session_watchdog(sess_id=probe_id))
 
@@ -669,7 +669,7 @@ async def reset():
                         <p><strong>umjiniti</strong> API key for 'JiniBot <strong>{os.getenv('JINIBOT_NAME')}</strong> has been reset.</p>
                         <p>You can retrieve the API key using the following one-time secret link. Note that this link will expire after a single use.</p>
                         <p>API Key Retrieval Link: <a href="{link}">{link}</a></p>
-                        <p>Thank you,<br/>umjiniti Team</p>
+                        <p>Thank you,<br/>JiniBot Team</p>
 
                         </div>"""
             if await email_report(subject=f"New Jini API Key Generated for {prim_contact_dict.get('eml')}", body_html=html_snippet) is True:
@@ -696,7 +696,8 @@ async def flow():
     script_path = os.path.join(cwd, 'utils', 'RemoteFlowRunner.py')
     task_command = f"python3 {script_path} -f {data.get('flow')} -n {data.get('name')}"
     job1 = await run_sync(lambda: cron.new(command=task_command, comment=job_comment))()
-    scheduled_job = await run_sync(lambda: schedule_cronjob(job1, data.get('schedule')))()
+    schedule = json.loads(data.get('schedule'))
+    scheduled_job = await run_sync(lambda: schedule_cronjob(job1, schedule))()
     if await run_sync(scheduled_job.is_valid)():
         await run_sync(cron.write)()
         await asyncio.sleep(1)
@@ -799,7 +800,7 @@ async def prbdata():
     data = await request.get_json()
     if not data:
         await ip_blocker(conn_obj=request)
-        return jsonify({'error': 'A JSON body is required'}), 400
+        raise Unauthorized()
     pattern = data.get('pattern') or 'prb:*'
     path = data.get('path') or '$'
 
@@ -818,6 +819,9 @@ async def prbdata():
 @user_login_required
 async def prbdelete():
     data = await request.get_json() 
+    if data is None:
+        await ip_blocker(conn_obj=request)
+        raise Unauthorized()
     id = data.get('id')
     result = await cl_data_db.del_obj(key=id)
     if result is None:
@@ -833,7 +837,8 @@ async def prbingest():
     await jwt_verification(request=request, api_key=api_key)    
     data = await request.get_json()
     if data is None:
-        return jsonify(), 400
+        await ip_blocker(conn_obj=request)
+        raise Unauthorized()
     payload = {
         'documents': data.get('documents'),
     }
